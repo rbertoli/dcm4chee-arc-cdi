@@ -17,7 +17,7 @@ import org.dcm4chee.archive.entity.Patient;
 // The @Stateless annotation eliminates the need for manual transaction
 // demarcation
 @Stateless
-public class PatientRegistration {
+public class StatelessEM {
 
 	@Inject
 	private EntityManager em;
