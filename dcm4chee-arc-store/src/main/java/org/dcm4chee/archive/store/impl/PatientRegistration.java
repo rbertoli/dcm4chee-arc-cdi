@@ -14,6 +14,7 @@ import org.dcm4chee.archive.entity.Patient;
  *
  */
 
+<<<<<<< HEAD
 // The @Stateless annotation eliminates the need for manual transaction
 // demarcation
 @Stateless
@@ -30,3 +31,20 @@ public class PatientRegistration {
 		em.persist(patient);
 	}
 }
+=======
+//The @Stateless annotation eliminates the need for manual transaction demarcation
+@Stateless
+public class PatientRegistration {
+	
+	@Inject
+    private EntityManager em;
+	
+    @Inject
+    private Logger log;
+	
+	public void register(Patient patient) throws Exception {
+		log.info("Registering: " + patient);
+        em.persist(patient);        
+    }
+}
+>>>>>>> 7068e6bd548b8b6800e216a5d197eaf21593c69c
