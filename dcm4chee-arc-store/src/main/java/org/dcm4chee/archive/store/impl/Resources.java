@@ -25,4 +25,3 @@ public class Resources {
 		return Logger.getLogger(injectionPoint.getMember().getDeclaringClass().getName());
 	}
 }
-
