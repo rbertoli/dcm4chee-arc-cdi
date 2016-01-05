@@ -40,6 +40,7 @@ package org.dcm4chee.archive.wado.client.impl;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.concurrent.ExecutionException;
 
 import javax.inject.Inject;
 
@@ -62,12 +63,12 @@ import org.dcm4chee.archive.wado.client.InstanceAvailableCallback;
 import org.dcm4chee.archive.wado.client.WadoClient;
 import org.dcm4chee.archive.wado.client.WadoClientResponse;
 import org.dcm4chee.archive.wado.client.WadoClientService;
+import org.dcm4chee.storage.StorageContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
  * @author Hesham Elbadawi <bsdreko@gmail.com>
- *
  */
 public class WadoClientServiceImpl implements WadoClientService {
 
@@ -110,10 +111,10 @@ public class WadoClientServiceImpl implements WadoClientService {
     public boolean store(StoreContext context) {
         context.setFetch(true);
         try {
-            storeService.parseSpoolFile(context);
+            //storeService.parseSpoolFile(context);
             try {
-                storeService.storeMetaData(context);
-                storeService.processFile(context);
+                storeService.beginStoreMetadata(context);
+                storeService.beginProcessFile(context);
                 storeService.updateDB(context);
             } catch (DicomServiceException e) {
                 context.setStoreAction(StoreAction.FAIL);
@@ -121,11 +122,19 @@ public class WadoClientServiceImpl implements WadoClientService {
                 throw e;
             } finally {
                 storeService.fireStoreEvent(context);
+
+                switch(context.getStoreAction()) {
+                    case IGNORE:
+                    case UPDATEDB:
+                        break;
+                    default:
+                        LOG.debug("Fetched and Stored instance from remote AE {}"
+                                , context.getStoreSession().getRemoteAET());
+                        getCallBack().onInstanceAvailable(createArchiveInstanceLocator(context));
+                }
+
                 storeService.cleanup(context);
             }
-            LOG.debug("Fetched and Stored instance from remote AE {}"
-                    , context.getStoreSession().getRemoteAET());
-            getCallBack().onInstanceAvailable(createArchiveInstanceLocator(context));
             return true;
         } catch (Exception x) {
             LOG.error("Failed to store RejectionNote!", x);
@@ -137,24 +146,21 @@ public class WadoClientServiceImpl implements WadoClientService {
             InputStream in, InstanceAvailableCallback callback) throws Exception {
         StoreContext context;
         ApplicationEntity localAE = aeCache.findApplicationEntity(localAETitle);
-            StoreSession session = storeService.createStoreSession(storeService); 
+        StoreSession session = storeService.createStoreSession(storeService);
         session.setSource(new GenericParticipant(localAE.getConnections()
                 .get(0).getHostname(), "WadoRS Fetch"));
-            session.setRemoteAET(remoteAETitle);
-            ArchiveAEExtension arcAEExt = aeCache.get(localAETitle)
-                    .getAEExtension(ArchiveAEExtension.class); 
-            session.setArchiveAEExtension(arcAEExt);
-            storeService.initStorageSystem(session);
-            storeService.initSpoolDirectory(session);
-            storeService.initMetaDataStorageSystem(session);
-            context = storeService.createStoreContext(session);
-            try {
+        session.setRemoteAET(remoteAETitle);
+        ArchiveAEExtension arcAEExt = aeCache.get(localAETitle)
+                .getAEExtension(ArchiveAEExtension.class);
+        session.setArchiveAEExtension(arcAEExt);
+        storeService.init(session);
+        context = storeService.createStoreContext(session);
+        try {
             DicomInputStream din = new DicomInputStream(in);
             Attributes fmi = din.getFileMetaInformation();
             storeService.writeSpoolFile(context, fmi, din);
-        }
-        catch (Exception e) {
-            throw new Exception("Failed to spool WadoRS response from AE "+
+        } catch (Exception e) {
+            throw new Exception("Failed to spool WadoRS response from AE " +
                     remoteAETitle);
         }
         return context;
@@ -174,22 +180,21 @@ public class WadoClientServiceImpl implements WadoClientService {
     }
 
 
-    private ArchiveInstanceLocator createArchiveInstanceLocator(
-            StoreContext context) {
+    private ArchiveInstanceLocator createArchiveInstanceLocator(StoreContext context) throws
+                InterruptedException, ExecutionException {
+        StorageContext bulkdataContext = context.getBulkdataContext().get(); //waits for the store to finish
         ArchiveInstanceLocator newLocator = new ArchiveInstanceLocator.Builder(
                 context.getInstance().getSopClassUID(), 
                 context.getInstance().getSopInstanceUID(),
                 context.getFileRef().getTransferSyntaxUID())
         .storageSystem(context.getStoreSession().getStorageSystem())
-        .storagePath(context.getStoragePath())
+        .storagePath(bulkdataContext.getFilePath().toString())
         .entryName(context.getFileRef().getEntryName())
         .fileTimeZoneID(context.getFileRef().getTimeZone())
         .retrieveAETs(context.getInstance().getRawRetrieveAETs())
         .withoutBulkdata(context.getFileRef().isWithoutBulkData())
-        .seriesInstanceUID(context.getAttributes()
-                .getString(Tag.SeriesInstanceUID))
-        .studyInstanceUID(context.getAttributes()
-                .getString(Tag.StudyInstanceUID))
+        .seriesInstanceUID(context.getAttributes().getString(Tag.SeriesInstanceUID))
+        .studyInstanceUID(context.getAttributes().getString(Tag.StudyInstanceUID))
         .build();
         byte[] encodedInstanceAttrs = context.getInstance().getAttributesBlob()
                 .getEncodedAttributes();

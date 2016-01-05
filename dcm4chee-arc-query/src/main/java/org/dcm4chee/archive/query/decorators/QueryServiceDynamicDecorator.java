@@ -1,22 +1,23 @@
 package org.dcm4chee.archive.query.decorators;
 
-import java.util.EnumSet;
-
-import javax.decorator.Decorator;
-import javax.decorator.Delegate;
-import javax.inject.Inject;
-
 import org.dcm4che3.data.Attributes;
+import org.dcm4che3.net.ApplicationEntity;
 import org.dcm4che3.net.QueryOption;
 import org.dcm4che3.net.service.DicomServiceException;
 import org.dcm4chee.archive.conf.ArchiveAEExtension;
 import org.dcm4chee.archive.conf.QueryParam;
 import org.dcm4chee.archive.entity.SeriesQueryAttributes;
+import org.dcm4chee.archive.entity.Study;
 import org.dcm4chee.archive.entity.StudyQueryAttributes;
 import org.dcm4chee.archive.query.Query;
 import org.dcm4chee.archive.query.QueryContext;
 import org.dcm4chee.archive.query.QueryService;
 import org.dcm4chee.conf.decorators.DynamicDecoratorWrapper;
+
+import javax.decorator.Decorator;
+import javax.decorator.Delegate;
+import javax.inject.Inject;
+import java.util.EnumSet;
 
 @Decorator
 public class QueryServiceDynamicDecorator extends DynamicDecoratorWrapper<QueryService> implements QueryService {
@@ -89,5 +90,10 @@ public class QueryServiceDynamicDecorator extends DynamicDecoratorWrapper<QueryS
 	@Override
 	public SeriesQueryAttributes createSeriesView(Long seriesPk, QueryParam queryParam) {
 		return wrapWithDynamicDecorators(delegate).createSeriesView(seriesPk, queryParam);
+	}
+
+	@Override
+	public void calculateDerivedFields(Study study, ApplicationEntity ae) {
+		wrapWithDynamicDecorators(delegate).calculateDerivedFields(study, ae);
 	}
 }

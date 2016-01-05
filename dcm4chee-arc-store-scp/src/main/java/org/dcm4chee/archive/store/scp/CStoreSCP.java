@@ -49,6 +49,7 @@ import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.Tag;
 import org.dcm4che3.data.VR;
 import org.dcm4che3.net.Association;
+import org.dcm4che3.net.Dimse;
 import org.dcm4che3.net.PDVInputStream;
 import org.dcm4che3.net.Status;
 import org.dcm4che3.net.pdu.PresentationContext;
@@ -57,6 +58,7 @@ import org.dcm4che3.net.service.DicomService;
 import org.dcm4che3.net.service.DicomServiceException;
 import org.dcm4chee.archive.conf.ArchiveAEExtension;
 import org.dcm4chee.archive.dto.LocalAssociationParticipant;
+import org.dcm4chee.archive.monitoring.api.MonitoredService;
 import org.dcm4chee.archive.store.StoreContext;
 import org.dcm4chee.archive.store.StoreService;
 import org.dcm4chee.archive.store.StoreSession;
@@ -76,6 +78,13 @@ public class CStoreSCP extends BasicCStoreSCP {
     private IApplicationEntityCache aeCache;
     
     @Override
+    @MonitoredService(name = { "dicom", "service", "dimse", "CStoreSCP" })
+    public void onDimseRQ(Association as, PresentationContext pc, Dimse dimse,
+            Attributes rq, PDVInputStream data) throws IOException {
+    	super.onDimseRQ(as, pc, dimse, rq, data);
+    }
+    
+    @Override
     protected void store(Association as, PresentationContext pc, Attributes rq,
             PDVInputStream data, Attributes rsp) throws IOException {
 
@@ -90,19 +99,22 @@ public class CStoreSCP extends BasicCStoreSCP {
                 session.setRemoteAET(as.getRemoteAET());
                 session.setRemoteApplicationEntity(aeCache.get(as.getRemoteAET()));
                 session.setArchiveAEExtension(arcAE);
-                storeService.initStorageSystem(session);
-                storeService.initSpoolDirectory(session);
-                storeService.initMetaDataStorageSystem(session);
+                storeService.init(session);
                 as.setProperty(StoreSession.class.getName(), session);
             }
             Attributes fmi = as.createFileMetaInformation(
                   rq.getString(Tag.AffectedSOPInstanceUID),
                   rq.getString(Tag.AffectedSOPClassUID),
                   pc.getTransferSyntax());
+
             StoreContext context = storeService.createStoreContext(session);
-            storeService.writeSpoolFile(context, fmi, data);
-            storeService.parseSpoolFile(context);
+            context.setTransferSyntax(pc.getTransferSyntax());
+            context.setFileMetainfo(fmi);
+            context.setInputStream(data);
+
+            storeService.spool(context);
             storeService.store(context);
+
             Attributes coercedAttrs = context.getCoercedOriginalAttributes();
             if (!coercedAttrs.isEmpty() 
                     && !session.getArchiveAEExtension()

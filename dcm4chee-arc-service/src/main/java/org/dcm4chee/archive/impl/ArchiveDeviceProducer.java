@@ -46,8 +46,9 @@ import javax.enterprise.context.ApplicationScoped;
 import javax.enterprise.inject.Produces;
 import javax.inject.Inject;
 
-import org.dcm4che3.conf.core.api.ConfigurationException;
 import org.dcm4che3.conf.api.DicomConfiguration;
+import org.dcm4che3.conf.api.internal.DicomConfigurationManager;
+import org.dcm4che3.conf.core.api.ConfigurationException;
 import org.dcm4che3.imageio.codec.ImageReaderFactory;
 import org.dcm4che3.imageio.codec.ImageWriterFactory;
 import org.dcm4che3.net.Device;
@@ -57,6 +58,7 @@ import org.dcm4chee.archive.code.CodeService;
 import org.dcm4chee.archive.conf.ArchiveDeviceExtension;
 import org.dcm4chee.archive.conf.QueryRetrieveView;
 import org.dcm4chee.archive.entity.Code;
+import org.dcm4chee.storage.conf.StorageDevice;
 
 /**
  * @author Gunter Zeilinger <gunterze@gmail.com>
@@ -71,7 +73,7 @@ public class ArchiveDeviceProducer {
             "dcm4chee-arc";
 
     @Inject
-    private DicomConfiguration conf;
+    private DicomConfigurationManager conf;
 
     @Inject
     private CodeService codeService;
@@ -82,12 +84,13 @@ public class ArchiveDeviceProducer {
     private void init() {
         try {
             device = findDevice();
+            conf.preventDeviceModifications(device);
         } catch (ConfigurationException e) {
             throw new RuntimeException(e);
         }
-        findOrCreateRejectionCodes();
-        initImageReaderFactory();
-        initImageWriterFactory();
+        findOrCreateRejectionCodes(device);
+        initImageReaderFactory(device);
+        initImageWriterFactory(device);
     }
 
     @Produces
@@ -95,11 +98,17 @@ public class ArchiveDeviceProducer {
         return device;
     }
 
-    public void reloadConfiguration() throws Exception {
-        device.reconfigure(findDevice());
-        findOrCreateRejectionCodes();
-        initImageReaderFactory();
-        initImageWriterFactory();
+    @Produces @StorageDevice
+    public Device getStorageDevice() {
+        return device;
+    }
+    // synchronized to prevent concurrent reconfigure
+    public synchronized void reloadConfiguration() throws Exception {
+        Device deviceLoaded = findDevice();
+        findOrCreateRejectionCodes(deviceLoaded);
+        initImageReaderFactory(deviceLoaded);
+        initImageWriterFactory(deviceLoaded);
+        this.device.reconfigure(deviceLoaded);
     }
 
     private Device findDevice() throws ConfigurationException {
@@ -112,7 +121,7 @@ public class ArchiveDeviceProducer {
         return arcDevice;
     }
 
-    private void findOrCreateRejectionCodes() {
+    private void findOrCreateRejectionCodes(Device device) {
         Collection<Code> found = new ArrayList<Code>();
         ArchiveDeviceExtension arcDev =
                 device.getDeviceExtensionNotNull(ArchiveDeviceExtension.class);
@@ -146,20 +155,28 @@ public class ArchiveDeviceProducer {
         }
     }
 
-    private void initImageReaderFactory() {
+    private void initImageReaderFactory(Device device) {
         ImageReaderExtension ext = device.getDeviceExtension(ImageReaderExtension.class);
-        if (ext != null)
-            ImageReaderFactory.setDefault(ext.getImageReaderFactory());
-        else
+        if (ext != null) {
+            ImageReaderFactory imageReaderFactory = ext.getImageReaderFactory();
+            ImageReaderFactory.setDefault(imageReaderFactory);
+            imageReaderFactory.init();
+        } else {
             ImageReaderFactory.resetDefault();
+            ImageReaderFactory.getDefault(); // init now
+        }
     }
 
-    private void initImageWriterFactory() {
+    private void initImageWriterFactory(Device device) {
         ImageWriterExtension ext = device.getDeviceExtension(ImageWriterExtension.class);
-        if (ext != null)
-            ImageWriterFactory.setDefault(ext.getImageWriterFactory());
-        else
+        if (ext != null) {
+            ImageWriterFactory imageWriterFactory = ext.getImageWriterFactory();
+            ImageWriterFactory.setDefault(imageWriterFactory);
+            imageWriterFactory.init();
+        } else {
             ImageWriterFactory.resetDefault();
+            ImageWriterFactory.getDefault(); // init now
+        }
     }
 
 }

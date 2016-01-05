@@ -41,113 +41,93 @@ package org.dcm4chee.archive.compress.impl;
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.BulkData;
 import org.dcm4che3.data.Tag;
+import org.dcm4che3.data.VR;
 import org.dcm4che3.imageio.codec.CompressionRule;
 import org.dcm4che3.imageio.codec.CompressionRules;
 import org.dcm4che3.net.Status;
 import org.dcm4che3.net.service.DicomServiceException;
-import org.dcm4che3.util.TagUtils;
-import org.dcm4chee.archive.compress.CompressionService;
 import org.dcm4chee.archive.conf.ArchiveAEExtension;
 import org.dcm4chee.archive.store.StoreContext;
 import org.dcm4chee.archive.store.StoreSession;
 import org.dcm4chee.archive.store.decorators.DelegatingStoreService;
 import org.dcm4chee.conf.decorators.DynamicDecorator;
-import org.dcm4chee.storage.ObjectAlreadyExistsException;
 import org.dcm4chee.storage.StorageContext;
 import org.dcm4chee.storage.service.StorageService;
+import org.dcm4chee.task.WeightWatcher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.inject.Inject;
-import java.io.IOException;
-import java.io.OutputStream;
-import java.nio.file.Path;
-import java.security.MessageDigest;
 
 /**
+ * Extends the logic of the Store Service with rule-based on-the-fly compression.
+ *
  * @author Umberto Cappellini <umberto.cappellini@agfa.com>
- * 
+ * @author Hermann Czedik-Eysenberg <hermann-agfa@czedik.net>
  */
 @DynamicDecorator
 public class StoreServiceCompressDecorator extends DelegatingStoreService {
 
-    static Logger LOG = LoggerFactory.getLogger(StoreServiceCompressDecorator.class);
+    private static Logger LOG = LoggerFactory.getLogger(StoreServiceCompressDecorator.class);
 
     @Inject
     private StorageService storageService;
 
     @Inject
-    private CompressionService compressionService;
+    private WeightWatcher weightWatcher;
 
     @Override
-    public void processFile(StoreContext context)
-            throws DicomServiceException {
-        
+    public StorageContext processFile(StoreContext context) throws DicomServiceException {
         // if possible, compress the file, store on file system and
-        // update store context. Otherwise call the standard moveFile.
-        if (!compress(context)) {
-            getNextDecorator().processFile(context);
+        // update store context. Otherwise call the standard processFile.
+        StorageContext bulkdataContext = compress(context);
+
+        // compression wasn't needed/failed -> standard processFile
+        if (bulkdataContext == null) {
+            bulkdataContext = getNextDecorator().processFile(context);
         }
+
+        // in any case, nullify PixelData, just to be consistent with StoreCompressedTask which also has to nullify PixelData
+        // (to ensure garbage collection of Compressor is possible)
+        Attributes originalAttributes = context.getOriginalAttributes();
+        if (originalAttributes.contains(Tag.PixelData)) {
+            originalAttributes.setNull(Tag.PixelData, VR.OB);
+        }
+
+        return bulkdataContext;
     }
 
-    private boolean compress(StoreContext context) throws DicomServiceException {
-        Attributes attrs = context.getAttributes();
-        Object pixelData = attrs.getValue(Tag.PixelData);
-        if (!(pixelData instanceof BulkData))
-            return false;
-        
-        StoreSession session = context.getStoreSession();
-        ArchiveAEExtension arcAE = session.getArchiveAEExtension();
-        CompressionRules rules = arcAE.getCompressionRules();
-        CompressionRule rule = rules.findCompressionRule(session.getRemoteAET(), attrs);
-        if (rule == null)
-            return false;
-        else
-            LOG.info("Compression rule selected:"+rule.getCommonName());
+    private StorageContext compress(StoreContext context)
+            throws DicomServiceException {
 
-        MessageDigest digest = session.getMessageDigest();
-        StorageContext storageContext =
-                storageService.createStorageContext(session.getStorageSystem());
-        Path source = context.getSpoolFile();
-        String origStoragePath = context.calcStoragePath();
-        String storagePath = origStoragePath;
-        int copies = 1;
-        OutputStream out;
-        for (;;)
-            try {
-                out = storageService.openOutputStream(storageContext, storagePath);
-                break;
-            } catch (ObjectAlreadyExistsException e) {
-                storagePath = origStoragePath + '.' + copies++;
-            } catch (Exception e) {
-                throw new DicomServiceException(Status.UnableToProcess, e);
-            }
+        StoreSession session = context.getStoreSession();
+
+        ArchiveAEExtension archiveAE = session.getArchiveAEExtension();
+        CompressionRules rules = archiveAE.getCompressionRules();
+
+        Attributes attributes = context.getOriginalAttributes();
+        Object pixelData = attributes.getValue(Tag.PixelData);
+
+        if (!(pixelData instanceof BulkData || pixelData instanceof byte[]))
+            return null; // already compressed or no pixel data at all
+
+        CompressionRule rule = rules.findCompressionRule(session.getRemoteAET(), attributes);
+
+        if (rule == null)
+            return null;
+
+        LOG.info("Compression rule selected: " + rule.getCommonName());
+
+        StorageContext bulkdataContext;
         try {
-            try {
-                compressionService.compress(rule, source, out, digest,
-                                context.getTransferSyntax(), attrs);
-            } finally {
-                out.close();
-            }
+            bulkdataContext = weightWatcher.execute(new StoreCompressedTask(storageService, context, rule));
         } catch (Exception e) {
-            LOG.info("{}: Compression failed:", session, e);
-            try {
-                storageService.deleteObject(storageContext, storagePath);
-            } catch (IOException e1) {
-                LOG.warn("{}: Failed to delete compressed file - {}",
-                        context.getStoreSession(), storagePath, e);
-            }
-            return false;
+            if (e instanceof DicomServiceException)
+                throw (DicomServiceException) e;
+            throw new DicomServiceException(Status.UnableToProcess, e);
         }
-        context.setStorageContext(storageContext);
-        context.setStoragePath(storagePath);
-        context.setFinalFileSize(storageContext.getFileSize());
-        context.setTransferSyntax(rule.getTransferSyntax());
-        if (digest != null) {
-            context.setFinalFileDigest(
-                    TagUtils.toHexString(digest.digest()));
-        }
-        return true;
-     }
+
+        return bulkdataContext;
+    }
 
 }

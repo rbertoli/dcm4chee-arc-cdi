@@ -38,6 +38,7 @@
 package org.dcm4chee.archive.qc;
 
 import java.util.Collection;
+import java.util.Map;
 
 import javax.persistence.EntityNotFoundException;
 
@@ -46,11 +47,10 @@ import org.dcm4che3.data.Code;
 import org.dcm4che3.data.IDWithIssuer;
 import org.dcm4chee.archive.conf.ArchiveAEExtension;
 import org.dcm4chee.archive.conf.ArchiveDeviceExtension;
-
 import org.dcm4chee.archive.entity.Instance;
 import org.dcm4chee.archive.entity.Patient;
 import org.dcm4chee.archive.entity.PatientID;
-import org.dcm4chee.archive.entity.QCUpdateHistory.QCUpdateScope;
+import org.dcm4chee.archive.entity.history.UpdateHistory;
 import org.dcm4chee.archive.qc.impl.QCPostProcessor;
 
 /**
@@ -59,6 +59,7 @@ import org.dcm4chee.archive.qc.impl.QCPostProcessor;
  * @author Hesham Elbadawi <bsdreko@gmail.com>
  */
 
+@Deprecated
 public interface QCBean {
 
     /**
@@ -84,7 +85,7 @@ public interface QCBean {
      */
     public QCEvent mergeStudies(String[] sourceStudyUids, String targetStudyUID,
             Attributes targetStudyattributes, Attributes targetSeriesattributes,
-            Code qcRejectionCode);
+            Code qcRejectionCode) throws QCOperationNotPermittedException;
 
     /**
      * Merge.
@@ -106,7 +107,7 @@ public interface QCBean {
      */
     public QCEvent merge(String sourceStudyUid, String targetStudyUid,
             Attributes targetStudyattributes, Attributes targetSeriesattributes,
-            Code qcRejectionCode);
+            Code qcRejectionCode) throws QCOperationNotPermittedException ;
 
     /**
      * Split.
@@ -135,7 +136,7 @@ public interface QCBean {
      */
     public QCEvent split(Collection<String> toMove, IDWithIssuer pid,
             String targetStudyUID, Attributes createdStudyattributes,
-            Attributes targetSeriesattributes, Code qcRejectionCode);
+            Attributes targetSeriesattributes, Code qcRejectionCode) throws QCOperationNotPermittedException;
 
     /**
      * Segment.
@@ -168,7 +169,7 @@ public interface QCBean {
     public QCEvent segment(Collection<String> toMove, Collection<String> toClone,
             IDWithIssuer pid, String targetStudyUID,
             Attributes targetStudyattributes, Attributes targetSeriesattributes,
-            Code qcRejectionCode);
+            Code qcRejectionCode) throws QCOperationNotPermittedException;
 
     /**
      * Segment frame.
@@ -194,7 +195,7 @@ public interface QCBean {
      */
     public void segmentFrame(Instance toMove, Instance toClone,
             int frame, PatientID pid, String targetStudyUID,
-            Attributes targetStudyattributes, Attributes targetSeriesattributes);
+            Attributes targetStudyattributes, Attributes targetSeriesattributes) throws QCOperationNotPermittedException;
 /*
     *//**
      * Move.
@@ -264,8 +265,8 @@ public interface QCBean {
      * @throws EntityNotFoundException
      *             the entity not found exception
      */
-    QCEvent updateDicomObject(ArchiveDeviceExtension arcDevExt, QCUpdateScope scope,
-            Attributes attributes) throws EntityNotFoundException;
+    QCEvent updateDicomObject(ArchiveDeviceExtension arcDevExt, UpdateHistory.UpdateScope scope,
+            Attributes attributes) throws QCOperationNotPermittedException, EntityNotFoundException;
     
     /**
      * Patient operation.
@@ -285,7 +286,7 @@ public interface QCBean {
      */
     boolean patientOperation(Attributes sourcePatientAttributes,
             Attributes targetPatientAttributes, ArchiveAEExtension arcAEExt,
-            PatientCommands command);
+            PatientCommands command) throws QCOperationNotPermittedException;
 
     /**
      * Locate instances.
@@ -296,7 +297,7 @@ public interface QCBean {
      *            the strings
      * @return the collection
      */
-    public Collection<Instance> locateInstances(String[] strings);
+    public Collection<Instance> locateInstances(String... strings);
 
     /**
      * Delete study.
@@ -309,7 +310,20 @@ public interface QCBean {
      * @throws Exception
      *             the exception
      */
-    public QCEvent deleteStudy(String studyInstanceUID) throws Exception;
+    public QCEvent deletePatient(IDWithIssuer pid, Code qcRejectionCode) throws QCOperationNotPermittedException;
+
+    /**
+     * Delete study.
+     * Deletes a study permanently
+     * The method will use the archives delete queue to perform asynchronously
+     * 
+     * @param studyInstanceUID
+     *            the study instance uid
+     * @return the QC event
+     * @throws Exception
+     *             the exception
+     */
+    public QCEvent deleteStudy(String studyInstanceUID, Code qcRejectionCode) throws QCOperationNotPermittedException;
 
     /**
      * Delete series.
@@ -322,7 +336,7 @@ public interface QCBean {
      * @throws Exception
      *             the exception
      */
-    public QCEvent deleteSeries(String seriesInstanceUID) throws Exception;
+    public QCEvent deleteSeries(String seriesInstanceUID, Code qcRejectionCode) throws QCOperationNotPermittedException;
 
     /**
      * Delete instance.
@@ -335,7 +349,17 @@ public interface QCBean {
      * @throws Exception
      *             the exception
      */
-    public QCEvent deleteInstance(String sopInstanceUID) throws Exception;
+    public QCEvent deleteInstance(String sopInstanceUID, Code qcRejectionCode) throws QCOperationNotPermittedException;
+
+    /**
+     * Delete patient if empty.
+     * Purges an empty patient.
+     * 
+     * @param pid
+     *            the patient id
+     * @return true, if successful
+     */
+    boolean deletePatientIfEmpty(IDWithIssuer pid);
 
     /**
      * Delete study if empty.
@@ -371,7 +395,7 @@ public interface QCBean {
      *            the QC rejection code
      * @return the QC event
      */
-    QCEvent reject(String[] sopInstanceUIDs, Code qcRejectionCode);
+    QCEvent reject(String[] sopInstanceUIDs, Code qcRejectionCode) throws QCOperationNotPermittedException;
 
     /**
      * Restore.
@@ -381,7 +405,7 @@ public interface QCBean {
      *            the sop instance ui ds
      * @return the QC event
      */
-    QCEvent restore(String[] sopInstanceUIDs);
+    QCEvent restore(String[] sopInstanceUIDs) throws QCOperationNotPermittedException;
 
     /**
      * Gets the patient from the archive.
@@ -391,5 +415,47 @@ public interface QCBean {
      * @return the patient
      */
     public Patient findPatient(Attributes attrs);
+
+    /**
+     * Split.
+     * Split study is a combined operation that uses the move basic operation.
+     * Given a set of instances to move the method will create a study in case
+     * the old study doesn't exist, using the provided createStudyAttributes
+     * to enrich the created study. The method will also enrich the created
+     * series with the targetSeriesAttributes (if provided).
+     * Throws an EJBException if the patient is different for any of the
+     * source study or the target study. Throws an EJB Exception if any
+     * of the instances are not found or do not belong to the same study.
+     * 
+     * @param toMove
+     *            the to move
+     * @param pid
+     *            the patient id
+     * @param targetStudyUID
+     *            the target study uid
+     * @param createdStudyattributes
+     *            the created study attributes
+     * @param targetSeriesattributes
+     *            the target series attributes
+     * @param qcRejectionCode
+     *            the QC rejection code
+     * @param noneIOCMAET
+     *            the none iocm compliant AET
+     * @return the QC event
+     */
+/*    public QCEvent splitNoneIOCM(Collection<String> toMove, IDWithIssuer pid,
+            String targetStudyUID, Attributes createdStudyattributes,
+            Attributes targetSeriesattributes, Code qcRejectionCode, String noneIOCMAET);*/
+
+    /**
+     * Perform additional QC and IOCM operation for the replacement done for an NoneIOCM Instance Update.
+     * 
+     * @param oldIUID
+     * @param newIUID
+     * @param qcRejectionCode
+     * @return 'UPDATE' QCEvent or null if operation was skipped. 
+     * @throws QCOperationNotPermittedException
+     */
+    QCEvent replaced(Map<String, String> oldToNewIUIDs, Code qcRejectionCode) throws QCOperationNotPermittedException;
 
 }

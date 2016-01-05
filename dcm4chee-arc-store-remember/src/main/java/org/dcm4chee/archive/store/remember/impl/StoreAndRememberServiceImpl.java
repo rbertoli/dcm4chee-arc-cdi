@@ -37,195 +37,417 @@
  * ***** END LICENSE BLOCK ***** */
 package org.dcm4chee.archive.store.remember.impl;
 
-import java.util.HashMap;
-import java.util.Iterator;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
 import java.util.Map.Entry;
+import java.util.UUID;
 
+import javax.annotation.Resource;
 import javax.enterprise.context.ApplicationScoped;
+import javax.enterprise.event.Event;
 import javax.enterprise.event.Observes;
 import javax.inject.Inject;
+import javax.jms.Connection;
+import javax.jms.ConnectionFactory;
+import javax.jms.JMSException;
+import javax.jms.MessageProducer;
+import javax.jms.ObjectMessage;
+import javax.jms.Queue;
+import javax.jms.Session;
 
+import org.dcm4che3.conf.api.DicomConfiguration;
 import org.dcm4che3.conf.api.IApplicationEntityCache;
 import org.dcm4che3.conf.core.api.ConfigurationException;
 import org.dcm4che3.data.Attributes;
-import org.dcm4che3.data.Sequence;
 import org.dcm4che3.data.Tag;
+import org.dcm4che3.data.VR;
 import org.dcm4che3.net.ApplicationEntity;
+import org.dcm4che3.net.Device;
+import org.dcm4che3.net.web.WebServiceAEExtension;
 import org.dcm4chee.archive.conf.ArchiveAEExtension;
+import org.dcm4chee.archive.conf.ArchiveDeviceExtension;
+import org.dcm4chee.archive.conf.QueryParam;
+import org.dcm4chee.archive.conf.QueryRetrieveView;
+import org.dcm4chee.archive.dto.ArchiveInstanceLocator;
 import org.dcm4chee.archive.dto.Service;
 import org.dcm4chee.archive.dto.ServiceType;
-import org.dcm4chee.archive.entity.StoreVerifyDimse;
+import org.dcm4chee.archive.entity.StoreAndRemember;
 import org.dcm4chee.archive.entity.StoreVerifyStatus;
-import org.dcm4chee.archive.entity.StoreVerifyWeb;
-import org.dcm4chee.archive.qido.client.QidoResponse;
-import org.dcm4chee.archive.stgcmt.scp.CommitEvent;
+import org.dcm4chee.archive.retrieve.RetrieveService;
+import org.dcm4chee.archive.store.remember.StoreAndRememberContext;
+import org.dcm4chee.archive.store.remember.StoreAndRememberContextBuilder;
+import org.dcm4chee.archive.store.remember.StoreAndRememberResponse;
 import org.dcm4chee.archive.store.remember.StoreAndRememberService;
-import org.dcm4chee.archive.store.verify.StoreVerifyEJB;
+import org.dcm4chee.archive.store.scu.CStoreSCUContext;
+import org.dcm4chee.archive.store.verify.StoreVerifyResponse;
+import org.dcm4chee.archive.store.verify.StoreVerifyResponse.VerifiedInstanceStatus;
+import org.dcm4chee.archive.store.verify.StoreVerifyService;
+import org.dcm4chee.archive.store.verify.StoreVerifyService.STORE_VERIFY_PROTOCOL;
+import org.dcm4chee.archive.stow.client.StowContext;
 import org.dcm4chee.storage.conf.Availability;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
  * @author Hesham Elbadawi <bsdreko@gmail.com>
+ * @author Alexander Hoermandinger <alexander.hoermandinger@agfa.com>
  *
  */
 @ApplicationScoped
 public class StoreAndRememberServiceImpl implements StoreAndRememberService {
-
-    private static final Logger LOG = LoggerFactory
-            .getLogger(StoreAndRememberServiceImpl.class);
-
-    @Inject
-    private StoreVerifyEJB ejb;
+    private static final Logger LOG = LoggerFactory.getLogger(StoreAndRememberServiceImpl.class);
 
     @Inject
     private IApplicationEntityCache aeCache;
+    
+    @Inject
+    private DicomConfiguration conf;
+    
+    @Inject
+    private StoreVerifyService storeVerifyService;
+    
+    @Inject
+    private RetrieveService retrieveService;
+    
+    @Inject
+    private Device device;
+    
+    @Inject
+    private StoreAndRememberEJB storeRememberEJB;
+    
+    @Inject
+    private Event<StoreAndRememberResponse> storeRememberResponse;
+    
+    @Resource(mappedName = "java:/JmsXA")
+    private ConnectionFactory connFactory;
 
-    @Override
-    public void addExternalLocation(String iuid, String retrieveAET,
-            String remoteDeviceName, Availability availability) {
-        ejb.addExternalLocation(iuid, retrieveAET, remoteDeviceName, availability);
+    @Resource(mappedName = "java:/queue/storeremember")
+    private Queue storeAndRememberQueue;
+   
+    public void storeAndRemember(StoreAndRememberContext ctx) {
+        ApplicationEntity remoteAE = getRemoteAE(ctx);
+        ApplicationEntity localAE = getLocalAE(ctx);
+        if (localAE == null || remoteAE == null) {
+            return;
+        }
+
+        List<ArchiveInstanceLocator> insts = locate(ctx.getInstances());
+      
+        STORE_VERIFY_PROTOCOL storeVerifyProtocol = ctx.getStoreVerifyProtocol();
+        // resolve automatic configuration of store-verify protocol
+        if (STORE_VERIFY_PROTOCOL.AUTO.equals(storeVerifyProtocol)) {
+            WebServiceAEExtension webAEExt = remoteAE.getAEExtension(WebServiceAEExtension.class);
+            if (webAEExt != null && webAEExt.getQidoRSBaseURL() != null && webAEExt.getStowRSBaseURL() != null) {
+                storeVerifyProtocol = STORE_VERIFY_PROTOCOL.STOW_PLUS_QIDO;
+            } else {
+                storeVerifyProtocol = STORE_VERIFY_PROTOCOL.CSTORE_PLUS_STGCMT;
+            }
+        }
+        
+        boolean isDimseStoreVerify = STORE_VERIFY_PROTOCOL.CSTORE_PLUS_STGCMT.equals(storeVerifyProtocol);
+        String storeVerifyTxUID = storeVerifyService.generateTransactionUID(isDimseStoreVerify);
+        createOrUpdateStoreRememberTransaction(ctx, storeVerifyTxUID);
+        
+        switch(storeVerifyProtocol) {
+        case CSTORE_PLUS_STGCMT:
+            CStoreSCUContext cxt = new CStoreSCUContext(localAE, remoteAE, ServiceType.STOREREMEMBER);
+            storeVerifyService.store(storeVerifyTxUID, cxt, insts);
+            break;
+        case STOW_PLUS_QIDO:
+            WebServiceAEExtension wsExt = remoteAE.getAEExtension(WebServiceAEExtension.class);
+            StowContext stowCtx = new StowContext(localAE, remoteAE, ServiceType.STOREREMEMBER);
+            stowCtx.setStowRemoteBaseURL(wsExt.getStowRSBaseURL());
+            stowCtx.setQidoRemoteBaseURL(wsExt.getQidoRSBaseURL());
+            storeVerifyService.store(storeVerifyTxUID, stowCtx, insts);
+            break;
+        default:
+            throw new RuntimeException("Unknown store-verify protocol " + ctx.getStoreVerifyProtocol());
+        }
     }
-
-    @Override
-    public void removeExternalLocations(String iuid, String retrieveAET) {
-        ejb.removeExternalLocation(iuid, retrieveAET);
+    
+    private void createOrUpdateStoreRememberTransaction(StoreAndRememberContext ctx, String storeVerifyTxUID) {
+        storeRememberEJB.createOrUpdateStoreRememberTx(ctx, storeVerifyTxUID);
     }
-
-    @Override
-    public void removeExternalLocations(String iuid, Availability availability) {
-        ejb.removeExternalLocation(iuid, availability);
+    
+    private List<ArchiveInstanceLocator> locate(String... iuids) {
+        ArchiveDeviceExtension arcDev = device.getDeviceExtension(ArchiveDeviceExtension.class);
+        Attributes keys = new Attributes();
+        keys.setString(Tag.SOPInstanceUID, VR.UI, iuids);
+        QueryParam queryParam = arcDev.getQueryParam();
+        QueryRetrieveView view = new QueryRetrieveView();
+        view.setViewID("IOCM");
+        view.setHideNotRejectedInstances(false);
+        queryParam.setQueryRetrieveView(view);
+        return retrieveService.calculateMatches(null, keys, queryParam, false);
     }
-
-    public void verifyCommit(@Observes @Service(ServiceType.STOREREMEMBER) CommitEvent commitEvent) {
-
-        String transactionUID = commitEvent.getTransactionUID();
-        ApplicationEntity archiveAE = null;
-        String remoteDeviceName = null;
+    
+    private ApplicationEntity getRemoteAE(StoreAndRememberContext cxt) {
+        String extDeviceName = cxt.getExternalDeviceName();
+        String remoteAeTitle = cxt.getRemoteAE();
+        ApplicationEntity remoteAE = null;
+        boolean error = false;
         try {
-            archiveAE = aeCache.findApplicationEntity(commitEvent
-                    .getLocalAET());
-            ApplicationEntity remoteAE = aeCache
-                    .findApplicationEntity(commitEvent.getRemoteAET());
-            remoteDeviceName = remoteAE.getDevice().getDeviceName();
-        } catch (ConfigurationException e) {
-            LOG.error("Unable to find Application"
-                    + " Entity for {} or {} verification failure for "
-                    + "store and remember transaction {}",
-                    commitEvent.getLocalAET(), commitEvent.getRemoteAET(),
-                    transactionUID);
-            ejb.removeDimseEntry(transactionUID);
-            return;
+            Device extDeviceTarget = conf.findDevice(extDeviceName);
+            remoteAE = extDeviceTarget.getApplicationEntity(remoteAeTitle);
+        } catch(Exception e) {
+           error = true;
         }
-        ArchiveAEExtension archAEExt = archiveAE
-                .getAEExtension(ArchiveAEExtension.class);
-        Availability defaultAvailability = archAEExt
-                .getDefaultExternalRetrieveAETAvailability();
-
-        Attributes eventInfo = commitEvent.getEventInfo();
-        Sequence failSops = eventInfo.getSequence(Tag.FailedSOPSequence);
-        Sequence refSops = eventInfo.getSequence(Tag.ReferencedSOPSequence);
-        StoreVerifyDimse dimse = ejb.getDimseEntry(transactionUID);
-
-        if (dimse == null) {
-            LOG.info("StoreAndRemember: commitment not recognized  :"
-                    + transactionUID);
-            return;
+        
+        if(error || remoteAE == null) {
+            LOG.error(String.format("Could not resolve remote AE '%s' of external device '%s' for Store-and-Remember task", 
+                    remoteAeTitle, extDeviceName));
         }
-
-        StoreVerifyStatus status = dimse.getStatus();
-        boolean statusChanged = false;
-
-        if (failSops == null || failSops.size() == 0) {
-            // no failures
-            if (status == StoreVerifyStatus.PENDING) {
-                status = StoreVerifyStatus.VERIFIED;
-                statusChanged = true;
-            }
-        } else if (refSops == null || refSops.size() == 0) {
-            // no success
-            if (status != StoreVerifyStatus.FAILED) {
-                status = StoreVerifyStatus.FAILED;
-                statusChanged = true;
-            }
-        } else {
-            // some failures, some success
-            if (status == StoreVerifyStatus.PENDING) {
-                status = StoreVerifyStatus.INCOMPLETE;
-                statusChanged = true;
-            }
-        }
-
-        if (refSops != null) {
-            for (int i = 0; i < refSops.size(); i++)
-                addExternalLocation(refSops.get(i)
-                        .getString(Tag.ReferencedSOPInstanceUID),
-                        commitEvent.getRemoteAET(),
-                        remoteDeviceName, defaultAvailability);
-        }
-
-        if (statusChanged)
-            ejb.updateStatus(transactionUID, status);
+        
+        return remoteAE;
     }
-
-    @Override
-    public void verifyQido(@Observes @Service(ServiceType.STOREREMEMBER) 
-    QidoResponse response) {
-        StoreVerifyWeb webEntry = ejb.getWebEntry(response.getTransactionID());
-        //failed attempt
-        if(webEntry == null)
+    
+    private ApplicationEntity getLocalAE(StoreAndRememberContext ctx) {
+       ApplicationEntity localAE = device.getApplicationEntity(ctx.getLocalAE());
+       if(localAE == null) {
+           LOG.error(String.format("Could not resolve local AE '%s' for Store-and-Remember task", ctx.getLocalAE()));
+       }
+       return localAE;
+    }
+  
+    public void onStoreVerifyResponse(@Observes @Service(ServiceType.STOREREMEMBER) StoreVerifyResponse storeVerifyResponse) {
+        String storeVerifyTxUID = storeVerifyResponse.getTransactionUID();
+        String storeAndRememberTxUID = getStoreAndRememberTransactionUID(storeVerifyTxUID);
+        if(storeAndRememberTxUID == null) {
+            LOG.error("Received store verify response for non existing transaction, store-verify-transaction UID: {}", storeVerifyTxUID);
             return;
-        String transactionID = response.getTransactionID();
+        }
+        
+        String localAET = storeVerifyResponse.getLocalAET();
+        String remoteAET = storeVerifyResponse.getRemoteAET();
+        
         Availability defaultAvailability = null;
+        
         String remoteDeviceName = null;
+        ArchiveAEExtension archAEExt = null;
         try {
-            ApplicationEntity archiveAE = aeCache
-                    .findApplicationEntity(webEntry.getLocalAET());
-            ApplicationEntity remoteAE = aeCache
-                    .findApplicationEntity(webEntry.getRemoteAET());
+            ApplicationEntity archiveAE = aeCache.findApplicationEntity(localAET);
+            ApplicationEntity remoteAE = aeCache.findApplicationEntity(remoteAET);
             remoteDeviceName= remoteAE.getDevice().getDeviceName();
-            ArchiveAEExtension archAEExt = archiveAE
-                    .getAEExtension(ArchiveAEExtension.class);
-            defaultAvailability = archAEExt
-                    .getDefaultExternalRetrieveAETAvailability();
+            archAEExt = archiveAE.getAEExtension(ArchiveAEExtension.class);
+            defaultAvailability = archAEExt.getDefaultExternalRetrieveAETAvailability();
         } catch (ConfigurationException e) {
             //failure attempt
             LOG.error("Unable to find Application"
                     + " Entity for {} or {} verification failure for "
                     + "store and remember transaction {}",
-                    webEntry.getLocalAET(), webEntry.getRemoteAET(),
-                    response.getTransactionID());
-            ejb.removeWebEntry(transactionID);
+                    localAET, remoteAET,
+                    storeAndRememberTxUID);
             return;
         }
-        String retrieveAET = webEntry.getRemoteAET();
-        HashMap<String, Availability> verifiedSopInstances = response.getVerifiedSopInstances();
+        
+        String retrieveAET = remoteAET;
+        Map<String, VerifiedInstanceStatus> verifiedSopInstances = storeVerifyResponse.getVerifiedInstances();
         int numToVerify = verifiedSopInstances.size();
-        for (Iterator<Entry<String, Availability>> iter = verifiedSopInstances
-                .entrySet().iterator(); iter.hasNext();) {
-            Entry<String, Availability> instance = iter.next();
-            Availability externalAvailability = instance.getValue();
-            String sopUID = instance.getKey();
-            if (externalAvailability.ordinal() < 2) {
-                addExternalLocation(
-                        sopUID,
-                        retrieveAET,
-                        remoteDeviceName
-                        ,
-                        defaultAvailability == null ? externalAvailability
-                                : (externalAvailability
-                                        .compareTo(defaultAvailability) <= 0 ? externalAvailability
-                                        : defaultAvailability));
-                iter.remove();
+        int numVerified = 0;
+        for(Entry<String, VerifiedInstanceStatus> inst : verifiedSopInstances.entrySet()) {
+            Availability externalAvailability = inst.getValue().getAvailability();
+            String sopInstanceUID = inst.getKey();
+            StoreAndRemember sr = storeRememberEJB.getStoreRememberTxByUIDs(storeAndRememberTxUID, sopInstanceUID);
+            if (Availability.ONLINE.equals(externalAvailability) || Availability.NEARLINE.equals(externalAvailability)) {
+                Availability instAvailability = (defaultAvailability == null) ? externalAvailability
+                        : (externalAvailability.compareTo(defaultAvailability) <= 0 ? externalAvailability : defaultAvailability);
+                
+                if(sr.isRemember()) {
+                    storeRememberEJB.rememberLocation(sopInstanceUID, retrieveAET, remoteDeviceName, instAvailability);
+                }
+                storeRememberEJB.updateStoreRemember(sr, StoreVerifyStatus.VERIFIED);
+                numVerified++;
+            } else {
+                storeRememberEJB.updateStoreRemember(sr, StoreVerifyStatus.FAILED);
             }
         }
+        
+        if(numVerified < numToVerify) {
+            int retriesLeft = storeRememberEJB.updatePartialStoreRemembersAndCheckForRetry(storeAndRememberTxUID);
+            if(retriesLeft > 0) {
+                // schedule retry
+                StoreAndRememberContextBuilderImpl ctxBuilder = createContextBuilder()
+                        .transactionUID(storeAndRememberTxUID)
+                        .retries(retriesLeft -1);
+                StoreAndRememberContext retryContext = storeRememberEJB.augmentStoreAndRememberContext(storeAndRememberTxUID, ctxBuilder)
+                        .build();
 
-        if (verifiedSopInstances.isEmpty())
-            ejb.updateStatus(transactionID, StoreVerifyStatus.VERIFIED);
-        else if (verifiedSopInstances.size() < numToVerify)
-            ejb.updateStatus(transactionID, StoreVerifyStatus.INCOMPLETE);
-        else
-            ejb.updateStatus(transactionID, StoreVerifyStatus.FAILED);
+                long delay = archAEExt.getStoreAndRememberDelayAfterFailedResponse() * 1000;
+                
+                scheduleStoreAndRemember(retryContext, delay);
+            } else {
+                // send 'failed' response
+                storeRememberResponse.fire(new StoreAndRememberResponse(storeAndRememberTxUID, verifiedSopInstances));
+            }
+        } else {
+            // send 'success' response
+            storeRememberEJB.removeStoreRemembers(storeAndRememberTxUID);
+            storeRememberResponse.fire(new StoreAndRememberResponse(storeAndRememberTxUID, verifiedSopInstances));
+        }
+    }
+    
+    private String getStoreAndRememberTransactionUID(String storeVerifyTxUID) {
+        return storeRememberEJB.getStoreRememberUIDByStoreVerifyUID(storeVerifyTxUID);
+    }
+    
+    private String generateTransactionUID() {
+        return UUID.randomUUID().toString();
+    }
+    
+    @Override
+    public StoreAndRememberContextBuilderImpl createContextBuilder() {
+        return new StoreAndRememberContextBuilderImpl();
+    }
+    
+    @Override
+    public void scheduleStoreAndRemember(StoreAndRememberContext ctx, long delay) {
+        try {
+            Connection conn = connFactory.createConnection();
+            try {
+                Session session = conn.createSession(false, Session.AUTO_ACKNOWLEDGE);
+                MessageProducer producer = session.createProducer(storeAndRememberQueue);
+                ObjectMessage msg = session.createObjectMessage(ctx);
+                StringBuilder iuid = new StringBuilder();
+                for (String i : ctx.getInstances()) {
+                    if (iuid.length() > 0) iuid.append(',');
+                    iuid.append(i);
+                }
+                msg.setStringProperty("SOP_INSTANCE_UID", iuid.toString());
+                if (delay > 0) {
+                    msg.setLongProperty("_HQ_SCHED_DELIVERY", System.currentTimeMillis() + delay);
+                }
+                msg.setJMSCorrelationID(ctx.getTransactionUID());
+                producer.send(msg);
+            } finally {
+                conn.close();
+            }
+        } catch (JMSException e) {
+            throw new RuntimeException("Error while scheduling archiving JMS message", e);
+        }
+    }
+
+    public class StoreAndRememberContextBuilderImpl implements StoreAndRememberContextBuilder {
+        private StoreAndRememberContextImpl cxt = new StoreAndRememberContextImpl();
+        private String[] instances;
+        private String studyIUID;
+        private String seriesIUID;
+        private int retries = -1;
+        
+        @Override
+        public StoreAndRememberContextBuilderImpl transactionUID(String txUID) {
+            cxt.setTransactionUID(txUID);
+            return this;
+        }
+        
+        @Override
+        public StoreAndRememberContextBuilderImpl instances(String... instances) {
+            this.instances = instances;
+            return this;
+        }
+        
+        @Override
+        public StoreAndRememberContextBuilderImpl seriesUID(String seriesIUID) {
+            this.seriesIUID = seriesIUID;
+            return this;
+        }
+        
+        @Override
+        public StoreAndRememberContextBuilderImpl studyUID(String studyIUID) {
+            this.studyIUID = studyIUID;
+            return this;
+        }
+        
+        @Override
+        public StoreAndRememberContextBuilderImpl localAE(String localAE) {
+            cxt.setLocalAE(localAE);
+            return this;
+        }
+        
+        @Override
+        public StoreAndRememberContextBuilderImpl externalDeviceName(String externalDeviceName) {
+            cxt.setExternalDeviceName(externalDeviceName);
+            return this;
+        }
+        
+        @Override
+        public StoreAndRememberContextBuilderImpl remoteAE(String remoteAE) {
+            cxt.setRemoteAE(remoteAE);
+            return this;
+        }
+        
+        @Override
+        public StoreAndRememberContextBuilderImpl retries(int retries) {
+            this.retries = retries;
+            return this;
+        }
+        
+        @Override
+        public StoreAndRememberContextBuilderImpl storeVerifyProtocol(STORE_VERIFY_PROTOCOL storeVerifyProtocol) {
+            cxt.setStoreVerifyProtocol(storeVerifyProtocol);
+            return this;
+        }
+        
+        public StoreAndRememberContextBuilderImpl remember(boolean remember) {
+            cxt.setRemember(remember);
+            return this;
+        }
+        
+        @Override
+        public StoreAndRememberContext build() {
+            String extDeviceName = cxt.getExternalDeviceName();
+            if(extDeviceName == null) {
+                throw new RuntimeException("Invalid store-and-remember request: no external device name set");
+            }
+            if(cxt.getRemoteAE() == null) {
+                throw new RuntimeException("Invalid store-and-remember request: no remote AE title set");
+            }
+            if(cxt.getLocalAE() == null) {
+                ArchiveDeviceExtension devExt = device.getDeviceExtension(ArchiveDeviceExtension.class);
+                String fetchAET = devExt.getFetchAETitle();
+                if (fetchAET == null) {
+                    throw new IllegalStateException(
+                            "Could not determine fetch AE title for Store-and-Remember");
+                }
+                cxt.setLocalAE(fetchAET);
+            }
+            if(cxt.getStoreVerifyProtocol() == null) {
+                cxt.setStoreVerifyProtocol(STORE_VERIFY_PROTOCOL.AUTO);
+            }
+            if(cxt.isRemember() == null) {
+                cxt.setRemember(true);
+            }
+            
+            if(cxt.getTransactionUID() == null) {
+                cxt.setTransactionUID(generateTransactionUID());
+            }
+            
+            if(retries == -1) {
+                ApplicationEntity ae;
+                try {
+                    ae = aeCache.findApplicationEntity(cxt.getLocalAE());
+                } catch (ConfigurationException e) {
+                    throw new RuntimeException("Could not find Application Entity for " + cxt.getLocalAE());
+                }
+                ArchiveAEExtension arcAE = ae.getAEExtension(ArchiveAEExtension.class);
+                cxt.setRetries(arcAE.getStoreAndRememberMaxRetries());
+            }
+            
+            if (instances == null) {
+                if (seriesIUID != null) {
+                    instances = storeRememberEJB.getNotExternallyArchivedSeriesInstances(seriesIUID, extDeviceName);
+                } else if (studyIUID != null) {
+                    instances = storeRememberEJB.getNotExternallyArchivedStudyInstances(studyIUID, extDeviceName);
+                } else {
+                    throw new RuntimeException("Invalid store-and-remember request: no series or study UID set");
+                }
+            }
+            
+            cxt.setInstances(instances);
+            
+            return cxt;
+        }
+
     }
 
 }

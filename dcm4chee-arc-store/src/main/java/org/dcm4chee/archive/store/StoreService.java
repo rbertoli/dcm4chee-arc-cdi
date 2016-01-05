@@ -51,10 +51,13 @@ import org.dcm4chee.archive.entity.Instance;
 import org.dcm4chee.archive.entity.Patient;
 import org.dcm4chee.archive.entity.Series;
 import org.dcm4chee.archive.entity.Study;
+import org.dcm4chee.storage.StorageContext;
 
 /**
- * @author Gunter Zeilinger <gunterze@gmail.com>
+ * The Store Service stores instances to the Archive. This involves writing files to a Storage System and updating the
+ * database.
  *
+ * @author Gunter Zeilinger <gunterze@gmail.com>
  */
 public interface StoreService {
 
@@ -65,13 +68,7 @@ public interface StoreService {
 
     StoreContext createStoreContext(StoreSession session);
 
-    void initStorageSystem(StoreSession session)
-            throws DicomServiceException;
-
-    void initMetaDataStorageSystem(StoreSession session)
-            throws DicomServiceException;
-
-    void initSpoolDirectory(StoreSession session) throws DicomServiceException;
+    void init(StoreSession session) throws DicomServiceException;
 
     void writeSpoolFile(StoreContext session, Attributes fmi, Attributes attrs)
             throws DicomServiceException;
@@ -79,9 +76,9 @@ public interface StoreService {
     void writeSpoolFile(StoreContext context, Attributes fmi, InputStream data)
             throws DicomServiceException;
 
-    void parseSpoolFile(StoreContext context) throws DicomServiceException;
-
     void onClose(StoreSession session);
+
+    void spool(StoreContext context) throws DicomServiceException;
 
     void store(StoreContext context) throws DicomServiceException;
 
@@ -90,12 +87,9 @@ public interface StoreService {
 
     void coerceAttributes(StoreContext context) throws DicomServiceException;
 
-    void processFile(StoreContext context) throws DicomServiceException;
+    StorageContext processFile(StoreContext context) throws DicomServiceException;
 
     void updateDB(StoreContext context) throws DicomServiceException;
-
-    void updateDB(EntityManager em, StoreContext context)
-            throws DicomServiceException;
 
     Instance findOrCreateInstance(EntityManager em, StoreContext context)
             throws DicomServiceException;
@@ -112,29 +106,15 @@ public interface StoreService {
     StoreAction instanceExists(EntityManager em, StoreContext context,
             Instance instance) throws DicomServiceException;
 
-    Instance createInstance(EntityManager em, StoreContext context)
-            throws DicomServiceException;
-
-    Series createSeries(EntityManager em, StoreContext context)
-            throws DicomServiceException;
-
-    Study createStudy(EntityManager em, StoreContext context)
-            throws DicomServiceException;
-
-    void updateInstance(EntityManager em, StoreContext context, Instance inst)
-            throws DicomServiceException;
-
-    void updateSeries(EntityManager em, StoreContext context, Series series)
-            throws DicomServiceException;
-
-    void updateStudy(EntityManager em, StoreContext context, Study study)
-            throws DicomServiceException;
-
-    void updatePatient(EntityManager em, StoreContext context, Patient patient);
-
     void cleanup(StoreContext context);
 
     void fireStoreEvent(StoreContext context);
 
-    void storeMetaData(StoreContext context) throws DicomServiceException;
+    StorageContext storeMetaData(StoreContext context) throws DicomServiceException;
+
+    void beginProcessFile(StoreContext context);
+
+    void beginStoreMetadata(StoreContext context);
+
+    Instance adjustForNoneIOCM(Instance instanceToStore, StoreContext context);
 }

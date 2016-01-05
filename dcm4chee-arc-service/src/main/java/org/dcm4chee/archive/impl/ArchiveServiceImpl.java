@@ -37,20 +37,8 @@
  * ***** END LICENSE BLOCK ***** */
 package org.dcm4chee.archive.impl;
 
-import java.io.File;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-
-import javax.annotation.PostConstruct;
-import javax.annotation.PreDestroy;
-import javax.ejb.Singleton;
-import javax.ejb.Startup;
-import javax.enterprise.event.Event;
-import javax.enterprise.inject.Instance;
-import javax.inject.Inject;
-
 import org.dcm4che3.conf.api.IApplicationEntityCache;
+import org.dcm4che3.conf.core.api.InternalConfigChangeEvent;
 import org.dcm4che3.net.Device;
 import org.dcm4che3.net.hl7.HL7DeviceExtension;
 import org.dcm4che3.net.hl7.service.HL7Service;
@@ -62,18 +50,37 @@ import org.dcm4chee.archive.ArchiveService;
 import org.dcm4chee.archive.ArchiveServiceReloaded;
 import org.dcm4chee.archive.ArchiveServiceStarted;
 import org.dcm4chee.archive.ArchiveServiceStopped;
+import org.dcm4chee.archive.conf.ArchiveDeviceExtension;
 import org.dcm4chee.archive.dto.Participant;
 import org.dcm4chee.archive.event.ConnectionEventSource;
 import org.dcm4chee.archive.event.LocalSource;
 import org.dcm4chee.archive.event.StartStopReloadEvent;
+import org.dcm4chee.conf.decorators.ConfiguredDynamicDecorators;
+import org.dcm4chee.conf.decorators.DynamicDecoratorsConfig;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import javax.annotation.PostConstruct;
+import javax.annotation.PreDestroy;
+import javax.ejb.Singleton;
+import javax.ejb.Startup;
+import javax.enterprise.event.Event;
+import javax.enterprise.event.Observes;
+import javax.enterprise.inject.Instance;
+import javax.inject.Inject;
+import java.io.File;
+import java.util.TimeZone;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 
 /**
  * @author Gunter Zeilinger <gunterze@gmail.com>
- *
  */
 @Singleton
 @Startup
 public class ArchiveServiceImpl implements ArchiveService {
+    private static final Logger LOG = LoggerFactory.getLogger(ArchiveServiceImpl.class);
     
     @Inject
     private ArchiveDeviceProducer deviceProducer;
@@ -91,6 +98,9 @@ public class ArchiveServiceImpl implements ArchiveService {
         "jboss.server.log",
         "jboss.server.temp",
     };
+
+    private static final String SITE_TIME_ZONE_PROPERTY = "site.TimeZone";
+    private static final String DB_TIME_ZONE_PROPERTY = "user.TimeZone";
 
     private ExecutorService executor;
 
@@ -117,6 +127,10 @@ public class ArchiveServiceImpl implements ArchiveService {
     @Inject
     private Device device;
 
+    @Inject
+    @ConfiguredDynamicDecorators
+    DynamicDecoratorsConfig decoratorsConfig;
+
     private boolean running;
 
     private final DicomService echoscp = new BasicCEchoSCP();
@@ -125,7 +139,7 @@ public class ArchiveServiceImpl implements ArchiveService {
 
     private final HL7ServiceRegistry hl7ServiceRegistry = new HL7ServiceRegistry();
 
-    private static void addJBossDirURLSystemProperties() {
+    private void addJBossDirURLSystemProperties() {
         for (String key : JBOSS_PROPERITIES) {
             String url = new File(System.getProperty(key + ".dir"))
                 .toURI().toString();
@@ -150,11 +164,12 @@ public class ArchiveServiceImpl implements ArchiveService {
                 hl7ServiceRegistry.addHL7Service(service);
             }
             device.setDimseRQHandler(serviceRegistry);
-            HL7DeviceExtension hl7Extension = 
+            HL7DeviceExtension hl7Extension =
                     device.getDeviceExtension(HL7DeviceExtension.class);
             if (hl7Extension != null) {
                 hl7Extension.setHL7MessageListener(hl7ServiceRegistry);
             }
+            setSystemAndDBTimeZone();
             start(new LocalSource());
         } catch (RuntimeException re) {
             destroy();
@@ -163,6 +178,29 @@ public class ArchiveServiceImpl implements ArchiveService {
             destroy();
             throw new RuntimeException(e);
         }
+
+        // this just touched and thus init'ed here to improve init log output, TBD where to move it
+        decoratorsConfig.getDecoratedServices();
+
+    }
+
+    //resets the config value for time zone to a property site.timezone
+    private void setSystemAndDBTimeZone() {
+        TimeZone siteTimeZone = device.getTimeZoneOfDevice();
+        String siteTimeZoneID = System.getProperty(SITE_TIME_ZONE_PROPERTY) == null ?
+                siteTimeZone == null ?
+                        TimeZone.getDefault().getID()
+                        : siteTimeZone.getID()
+                : System.getProperty(SITE_TIME_ZONE_PROPERTY);
+        device.setTimeZoneOfDevice(TimeZone.getTimeZone(siteTimeZoneID));
+
+        TimeZone dbTimeZone = device.getDeviceExtension(ArchiveDeviceExtension.class).getDataBaseTimeZone();
+        String dbTimeZoneID = System.getProperty(DB_TIME_ZONE_PROPERTY) == null ?
+                dbTimeZone == null ?
+                        TimeZone.getDefault().getID()
+                        : dbTimeZone.getID()
+                : System.getProperty(DB_TIME_ZONE_PROPERTY);
+        device.getDeviceExtension(ArchiveDeviceExtension.class).setDataBaseTimeZone(TimeZone.getTimeZone(dbTimeZoneID));
     }
 
     private void shutdown(ExecutorService executor) {
@@ -202,10 +240,20 @@ public class ArchiveServiceImpl implements ArchiveService {
     }
 
     @Override
+    public void onConfigChange(@Observes InternalConfigChangeEvent configChange) {
+        try {
+            reload(null);
+        } catch (Exception e) {
+            LOG.error("Error while reloading configuration", e);
+        }
+    }
+    
+    @Override
     public void reload(Participant source) throws Exception {
         aeCache.clear();
         deviceProducer.reloadConfiguration();
         device.rebindConnections();
+        setSystemAndDBTimeZone();
         archiveServiceReloaded.fire(new StartStopReloadEvent(device, source));
     }
 

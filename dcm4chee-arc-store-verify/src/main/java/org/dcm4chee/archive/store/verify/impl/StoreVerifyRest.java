@@ -65,14 +65,15 @@ import org.dcm4chee.storage.conf.StorageDeviceExtension;
 import org.dcm4chee.storage.conf.StorageSystem;
 
 /**
+ * TODO This is test code and should be moved to the test framework.
+ *
  * @author Gunter Zeilinger <gunterze@gmail.com>
- * 
  */
 @Path("/emulation")
 @RequestScoped
 public class StoreVerifyRest {
 
-    @PersistenceContext(name = "dcm4chee-arc")
+    @PersistenceContext(name = "dcm4chee-arc", unitName="dcm4chee-arc")
     EntityManager em;
 
     private static StorageDeviceExtension archStorageDevExt;
@@ -104,7 +105,7 @@ public class StoreVerifyRest {
         ArrayList<ArchiveInstanceLocator> locators = 
                 new ArrayList<ArchiveInstanceLocator>();
         locators.add(locateInstance(sopUID));
-        service.store(ctx, locators);
+        service.scheduleStore(null, ctx, locators);
     }
 
     @GET
@@ -121,7 +122,7 @@ public class StoreVerifyRest {
         ArrayList<ArchiveInstanceLocator> locators = 
                 new ArrayList<ArchiveInstanceLocator>();
         locators.add(locateInstance(sopUID));
-        service.store(ctx, locators);
+        service.scheduleStore(null, ctx, locators);
     }
 
     @GET
@@ -136,7 +137,7 @@ public class StoreVerifyRest {
         ArrayList<ArchiveInstanceLocator> locators = 
                 new ArrayList<ArchiveInstanceLocator>();
         locators.add(locateInstance(sopUID));
-        service.store(ctx, locators);
+        service.scheduleStore(null, ctx, locators);
     }
 
     @GET
@@ -150,7 +151,7 @@ public class StoreVerifyRest {
         ArrayList<ArchiveInstanceLocator> locators = 
                 new ArrayList<ArchiveInstanceLocator>();
         locators.add(locateInstance(sopUID));
-        service.store(ctx, locators);
+        service.scheduleStore(null, ctx, locators);
     }
 
     private Collection<Location> getFileAliasRefs(Instance instance) {

@@ -39,18 +39,20 @@
 package org.dcm4chee.archive.query.impl;
 
 import java.util.Date;
-import java.util.HashSet;
-import java.util.Set;
 
+import javax.ejb.EJB;
+import javax.ejb.EJBTransactionRolledbackException;
 import javax.ejb.Stateless;
+import javax.ejb.TransactionAttribute;
+import javax.ejb.TransactionAttributeType;
 import javax.inject.Inject;
 import javax.persistence.EntityManager;
+import javax.persistence.LockModeType;
 import javax.persistence.PersistenceContext;
 
 import org.dcm4che3.data.Attributes;
-import org.dcm4che3.util.StringUtils;
+import org.dcm4che3.net.Device;
 import org.dcm4chee.archive.conf.ArchiveDeviceExtension;
-import org.dcm4chee.archive.conf.PrivateTag;
 import org.dcm4chee.archive.conf.QueryParam;
 import org.dcm4chee.archive.entity.QInstance;
 import org.dcm4chee.archive.entity.QPatient;
@@ -63,11 +65,14 @@ import org.dcm4chee.archive.entity.SeriesQueryAttributes;
 import org.dcm4chee.archive.entity.Study;
 import org.dcm4chee.archive.entity.StudyQueryAttributes;
 import org.dcm4chee.archive.entity.Utils;
+import org.dcm4chee.archive.query.DerivedSeriesFields;
+import org.dcm4chee.archive.query.DerivedStudyFields;
 import org.dcm4chee.archive.query.QueryContext;
 import org.dcm4chee.archive.query.util.QueryBuilder;
 import org.dcm4chee.mysema.query.jpa.hibernate.DetachedHibernateQueryFactory;
-import org.dcm4chee.storage.conf.Availability;
 import org.hibernate.Session;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import com.mysema.commons.lang.CloseableIterator;
 import com.mysema.query.BooleanBuilder;
@@ -82,38 +87,35 @@ import com.mysema.query.types.Predicate;
 @Stateless
 public class QueryServiceEJB {
 
+    private static Logger LOG = LoggerFactory.getLogger(QueryServiceEJB.class);
+
     static final Expression<?>[] PATIENT_STUDY_SERIES_ATTRS = {
         QStudy.study.pk,
         QSeriesQueryAttributes.seriesQueryAttributes.numberOfInstances,
+        QSeriesQueryAttributes.seriesQueryAttributes.numberOfVisibleInstances,
+        QSeriesQueryAttributes.seriesQueryAttributes.lastUpdateTime,
         QStudyQueryAttributes.studyQueryAttributes.numberOfInstances,
         QStudyQueryAttributes.studyQueryAttributes.numberOfSeries,
         QStudyQueryAttributes.studyQueryAttributes.modalitiesInStudy,
         QStudyQueryAttributes.studyQueryAttributes.sopClassesInStudy,
+        QStudyQueryAttributes.studyQueryAttributes.numberOfVisibleInstances,
         QStudyQueryAttributes.studyQueryAttributes.lastUpdateTime,
         QueryBuilder.seriesAttributesBlob.encodedAttributes,
         QueryBuilder.studyAttributesBlob.encodedAttributes,
         QueryBuilder.patientAttributesBlob.encodedAttributes
     };
 
-    static final Expression<?>[] CALC_STUDY_QUERY_ATTRS = {
-        QSeries.series.pk,
-        QSeries.series.modality,
-        QInstance.instance.sopClassUID,
-        QInstance.instance.retrieveAETs,
-        QInstance.instance.availability,
-        QInstance.instance.updatedTime
-    };
+    @EJB
+    private QueryServiceEJB self;
 
-    static final Expression<?>[] CALC_SERIES_QUERY_ATTRS = {
-        QInstance.instance.retrieveAETs,
-        QInstance.instance.availability
-    };
-
-    @PersistenceContext(unitName = "dcm4chee-arc")
-    EntityManager em;
+    @PersistenceContext(name = "dcm4chee-arc", unitName = "dcm4chee-arc")
+    private EntityManager em;
 
     @Inject
-    DetachedHibernateQueryFactory queryFactory;
+    private Device device;
+
+    @Inject
+    private DetachedHibernateQueryFactory queryFactory;
 
     public Attributes getSeriesAttributes(Long seriesPk, QueryContext context) {
         String viewID = context.getQueryParam().getQueryRetrieveView().getViewID();
@@ -133,15 +135,26 @@ public class QueryServiceEJB {
 
         Integer numberOfSeriesRelatedInstances =
                 result.get(QSeriesQueryAttributes.seriesQueryAttributes.numberOfInstances);
+        Integer numberOfSeriesVisibleInstances;
+        Date seriesLastUpdateTime;
         if (numberOfSeriesRelatedInstances == null) {
             SeriesQueryAttributes seriesQueryAttributes =
                     calculateSeriesQueryAttributes(seriesPk, context.getQueryParam());
             numberOfSeriesRelatedInstances = seriesQueryAttributes.getNumberOfInstances();
+            numberOfSeriesVisibleInstances = seriesQueryAttributes.getNumberOfVisibleInstances();
+            seriesLastUpdateTime = seriesQueryAttributes.getLastUpdateTime();
+        } else {
+            numberOfSeriesVisibleInstances = result.get(QSeriesQueryAttributes
+                    .seriesQueryAttributes.numberOfVisibleInstances);
+            seriesLastUpdateTime = result.get(QSeriesQueryAttributes
+                    .seriesQueryAttributes.lastUpdateTime);
         }
+
 
         int numberOfStudyRelatedSeries;
         String modalitiesInStudy;
         String sopClassesInStudy;
+        int numberOfStudyVisibleInstances;
         Date studyLastUpdateTime;
         Integer numberOfStudyRelatedInstances =
                 result.get(QStudyQueryAttributes.studyQueryAttributes.numberOfInstances);
@@ -152,6 +165,7 @@ public class QueryServiceEJB {
             numberOfStudyRelatedSeries = studyQueryAttributes.getNumberOfSeries();
             modalitiesInStudy = studyQueryAttributes.getRawModalitiesInStudy();
             sopClassesInStudy = studyQueryAttributes.getRawSOPClassesInStudy();
+            numberOfStudyVisibleInstances = studyQueryAttributes.getNumberOfVisibleInstances();
             studyLastUpdateTime = studyQueryAttributes.getLastUpdateTime();
         } else {
             numberOfStudyRelatedSeries =
@@ -160,6 +174,7 @@ public class QueryServiceEJB {
                     result.get(QStudyQueryAttributes.studyQueryAttributes.modalitiesInStudy);
             sopClassesInStudy = 
                     result.get(QStudyQueryAttributes.studyQueryAttributes.sopClassesInStudy);
+            numberOfStudyVisibleInstances = result.get(QStudyQueryAttributes.studyQueryAttributes.numberOfVisibleInstances);
             studyLastUpdateTime = result.get(QStudyQueryAttributes.studyQueryAttributes.lastUpdateTime);
         }
         byte[] seriesBytes =
@@ -184,9 +199,16 @@ public class QueryServiceEJB {
                 numberOfStudyRelatedInstances,
                 modalitiesInStudy,
                 sopClassesInStudy,
+                numberOfStudyVisibleInstances,
+                ade.getPrivateDerivedFields().findStudyNumberOfVisibleInstancesTag(),
                 studyLastUpdateTime,
                 ade.getPrivateDerivedFields().findStudyUpdateTimeTag());
-        Utils.setSeriesQueryAttributes(attrs, numberOfSeriesRelatedInstances);
+        Utils.setSeriesQueryAttributes(attrs,
+                numberOfSeriesRelatedInstances,
+                numberOfSeriesVisibleInstances,
+                ade.getPrivateDerivedFields().findSeriesNumberOfVisibleInstancesTag(),
+                seriesLastUpdateTime,
+                ade.getPrivateDerivedFields().findSeriesUpdateTimeTag());
         return attrs;
     }
 
@@ -194,14 +216,30 @@ public class QueryServiceEJB {
         BooleanBuilder builder = new BooleanBuilder(initial);
         builder.and(QueryBuilder.hideRejectedInstance(queryParam));
         builder.and(QueryBuilder.hideRejectionNote(queryParam));
+        builder.and(QueryBuilder.hideDummyInstances());
         return builder;
     }
 
+    /**
+     * Creates StudyQueryAttributes
+     *
+     * @param studyPk primary key of study
+     * @param queryParam
+     * @return updated or created StudyQueryAttributes
+     */
     public StudyQueryAttributes calculateStudyQueryAttributes(
             Long studyPk, QueryParam queryParam) {
-        StudyQueryAttributesBuilder builder = createStudyQueryAttributesBuilder();
-        builder.setViewID(queryParam.getQueryRetrieveView().getViewID());
-        builder.setStudy(em.getReference(Study.class, studyPk));
+
+        DerivedStudyFields studyDerivedFields = new DefaultDerivedStudyFields(device);
+
+        Study study = em.find(Study.class, studyPk);
+        if(study == null) {
+            LOG.warn("Not calculating study query attributes. Study has been deleted in the meantime. {}", studyPk);
+            return null;
+        }
+
+        long calculatedForVersion = study.getVersion();
+
         try (
             CloseableIterator<Tuple> results = queryFactory.query(
                     em.unwrap(Session.class))
@@ -209,140 +247,133 @@ public class QueryServiceEJB {
                 .innerJoin(QInstance.instance.series, QSeries.series)
                 .where(createPredicate(
                         QSeries.series.study.pk.eq(studyPk), queryParam))
-                .iterate(CALC_STUDY_QUERY_ATTRS)) {
-
+                .iterate(studyDerivedFields.fields())) {
             while (results.hasNext()) {
-                builder.addInstance(results.next());
+                studyDerivedFields.addInstance(results.next(), queryParam);
             }
         }
-        StudyQueryAttributes queryAttrs = builder.build();
-        em.persist(queryAttrs);
+
+        StudyQueryAttributes queryAttrs = new StudyQueryAttributes();
+        queryAttrs.setViewID(queryParam.getQueryRetrieveView().getViewID());
+        queryAttrs.setStudy(study);
+        populateStudyQueryAttributes(studyDerivedFields, queryAttrs);
+
+        try {
+            // should run in own transaction
+            self.persistStudyQueryAttributes(queryAttrs, calculatedForVersion);
+        } catch (EJBTransactionRolledbackException transactionRolledbackException) {
+            LOG.warn("Study derived fields could not be persisted, this is usually okay - probably there was a concurrent calculation/update.", transactionRolledbackException);
+            // ... it could also mean that we forgot to clean the outdated query attributes when updating a study!
+        }
+
         return queryAttrs;
     }
 
+    @TransactionAttribute(TransactionAttributeType.REQUIRES_NEW)
+    public void persistStudyQueryAttributes(StudyQueryAttributes queryAttrs, long calculatedForVersion) {
+        // locking here ensures that we really never save the wrong version of the calculated fields
+        Study study = em.find(Study.class, queryAttrs.getStudy().getPk(), LockModeType.PESSIMISTIC_READ);
+        if(study != null) {
+            long version = study.getVersion();
+
+            // somebody might have changed the study in between (while we were calculating), then we must not save the results
+            if (calculatedForVersion == version) {
+                queryAttrs.setStudy(study);
+                em.persist(queryAttrs);
+            } else {
+                LOG.info("Not saving study query attributes, because there was a concurrent modification");
+            }
+        }
+    }
+
+    private void populateStudyQueryAttributes(DerivedStudyFields studyDerivedFields, StudyQueryAttributes queryAttrs) {
+        queryAttrs.setNumberOfInstances(studyDerivedFields.getNumberOfInstances());
+        if (studyDerivedFields.getNumberOfInstances() > 0) {
+            queryAttrs.setNumberOfSeries(studyDerivedFields.getSeriesPKs().size());
+            queryAttrs.setModalitiesInStudy(studyDerivedFields.getMods().toArray
+                    (new String[studyDerivedFields.getMods().size()]));
+            queryAttrs.setSOPClassesInStudy(studyDerivedFields.getCuids()
+                    .toArray(new String[studyDerivedFields.getCuids().size()]));
+            queryAttrs.setRetrieveAETs(studyDerivedFields.getRetrieveAETs());
+            queryAttrs.setAvailability(studyDerivedFields.getAvailability());
+            queryAttrs.setLastUpdateTime(studyDerivedFields.getLastUpdateTime());
+            queryAttrs.setNumberOfVisibleInstances(studyDerivedFields.getNumberOfVisibleImages());
+            queryAttrs.setNumberOfVisibleSeries(studyDerivedFields.getNumberOfVisibleSeries());
+        }
+    }
+
+    /**
+     * Creates SeriesQueryAttributes
+     *
+     * @param seriesPk primary key of series
+     * @param queryParam
+     * @return updated or created SeriesQueryAttributes
+     */
     public SeriesQueryAttributes calculateSeriesQueryAttributes(
             Long seriesPk, QueryParam queryParam) {
-        SeriesQueryAttributesBuilder builder = createSeriesQueryAttributesBuilder();
-        builder.setViewID(queryParam.getQueryRetrieveView().getViewID());
-        builder.setSeries(em.getReference(Series.class, seriesPk));
+
+        DerivedSeriesFields seriesDerivedFields = new DefaultDerivedSeriesFields(device);
+
+        Series series = em.find(Series.class, seriesPk);
+        if(series == null) {
+            LOG.warn("Not calculating series query attributes. Series has been deleted in the meantime. {}", seriesPk);
+            return null;
+        }
+
+        long calculatedForVersion = series.getVersion();
+
         try (
             CloseableIterator<Tuple> results = queryFactory.query(
                     em.unwrap(Session.class))
                 .from(QInstance.instance)
-                .where(createPredicate(
-                        QInstance.instance.series.pk.eq(seriesPk), queryParam))
-                .iterate(CALC_SERIES_QUERY_ATTRS)) {
-
+                .where(createPredicate(QInstance.instance.series.pk.eq(seriesPk), queryParam))
+                .iterate(seriesDerivedFields.fields())) {
             while (results.hasNext()) {
-                builder.addInstance(results.next());
+                seriesDerivedFields.addInstance(results.next(), queryParam);
             }
         }
-        SeriesQueryAttributes queryAttrs = builder.build();
-        em.persist(queryAttrs);
+
+        SeriesQueryAttributes queryAttrs = new SeriesQueryAttributes();
+        queryAttrs.setSeries(series);
+        queryAttrs.setViewID(queryParam.getQueryRetrieveView().getViewID());
+        populateSeriesDerivedFields(seriesDerivedFields, queryAttrs);
+
+        try {
+            // should run in own transaction
+            self.persistSeriesQueryAttributes(queryAttrs, calculatedForVersion);
+        } catch (EJBTransactionRolledbackException transactionRolledbackException) {
+            LOG.warn("Series derived fields could not be persisted, this is usually okay - probably there was a concurrent calculation/update.", transactionRolledbackException);
+            // ... it could also mean that we forgot to clean the outdated query attributes when updating a series!
+        }
+
         return queryAttrs;
     }
 
-    StudyQueryAttributesBuilder createStudyQueryAttributesBuilder() {
-        return new StudyQueryAttributesBuilder();
-    }
+    @TransactionAttribute(TransactionAttributeType.REQUIRES_NEW)
+    public void persistSeriesQueryAttributes(SeriesQueryAttributes queryAttrs, long calculatedForVersion) {
+        // locking here ensures that we really never save the wrong version of the calculated fields
+        Series series = em.find(Series.class, queryAttrs.getSeries().getPk(), LockModeType.PESSIMISTIC_READ);
+        if(series != null) {
+            long version = series.getVersion();
 
-    SeriesQueryAttributesBuilder createSeriesQueryAttributesBuilder() {
-        return new SeriesQueryAttributesBuilder();
-    }
-
-    static class CommonStudySeriesQueryAttributesBuilder {
-
-        protected int numberOfInstances;
-        protected String[] retrieveAETs;
-        protected Availability availability;
-        protected String viewID;
-
-        public void setViewID(String viewID) {
-            this.viewID = viewID;
-        }
-
-        public void addInstance(Tuple result) {
-            String[] retrieveAETs1 = StringUtils.split(
-                    result.get(QInstance.instance.retrieveAETs),
-                    '\\');
-            Availability availability1 =
-                    result.get(QInstance.instance.availability);
-            if (numberOfInstances++ == 0) {
-                retrieveAETs = retrieveAETs1;
-                availability = availability1;
+            // somebody might have changed the series in between (while we were calculating), then we must not save the results
+            if (calculatedForVersion == version) {
+                queryAttrs.setSeries(series);
+                em.persist(queryAttrs);
             } else {
-                retrieveAETs = Utils.intersection(
-                        retrieveAETs, retrieveAETs1);
-                if (availability.compareTo(availability1) < 0)
-                    availability = availability1;
+                LOG.info("Not saving series query attributes, because there was a concurrent modification");
             }
         }
     }
 
-    static class SeriesQueryAttributesBuilder
-            extends CommonStudySeriesQueryAttributesBuilder {
-
-        protected Series series;
-
-        public void setSeries(Series series) {
-            this.series = series;
-        }
-
-        public SeriesQueryAttributes build() {
-            SeriesQueryAttributes queryAttrs = new SeriesQueryAttributes();
-            queryAttrs.setSeries(series);
-            queryAttrs.setViewID(viewID);
-            queryAttrs.setNumberOfInstances(numberOfInstances);
-            if (numberOfInstances > 0) {
-                queryAttrs.setRetrieveAETs(retrieveAETs);
-                queryAttrs.setAvailability(availability);
-            }
-            return queryAttrs;
+    private void populateSeriesDerivedFields(DerivedSeriesFields seriesDerivedFields, SeriesQueryAttributes queryAttrs) {
+        queryAttrs.setNumberOfInstances(seriesDerivedFields.getNumberOfInstances());
+        if (seriesDerivedFields.getNumberOfInstances() > 0) {
+            queryAttrs.setRetrieveAETs(seriesDerivedFields.getRetrieveAETs());
+            queryAttrs.setAvailability(seriesDerivedFields.getAvailability());
+            queryAttrs.setLastUpdateTime(seriesDerivedFields.getLastUpdateTime());
+            queryAttrs.setNumberOfVisibleInstances(seriesDerivedFields.getNumberOfVisibleImages());
         }
     }
 
-    static class StudyQueryAttributesBuilder
-            extends CommonStudySeriesQueryAttributesBuilder {
-    
-        protected Set<Long> seriesPKs = new HashSet<Long>();
-        protected Set<String> mods = new HashSet<String>();
-        protected Set<String> cuids = new HashSet<String>();
-        protected Study study;
-        protected Date lastUpdateTime = null;
-
-        public void setStudy(Study study) {
-            this.study = study;
-        }
-
-        @Override
-        public void addInstance(Tuple result) {
-            super.addInstance(result);
-            if (seriesPKs.add(result.get(QSeries.series.pk))) {
-                String modality1 = result.get(QSeries.series.modality);
-                if (modality1 != null)
-                    mods.add(modality1);
-            }
-            cuids.add(result.get(QInstance.instance.sopClassUID));
-            Date instanceUpdateTime = result.get(QInstance.instance
-                    .updatedTime);
-            if (lastUpdateTime == null || instanceUpdateTime.after(lastUpdateTime))
-                lastUpdateTime = instanceUpdateTime;
-        }
-    
-        public StudyQueryAttributes build() {
-            StudyQueryAttributes queryAttrs = new StudyQueryAttributes();
-            queryAttrs.setViewID(viewID);
-            queryAttrs.setStudy(study);
-            queryAttrs.setNumberOfInstances(numberOfInstances);
-            if (numberOfInstances > 0) {
-                queryAttrs.setNumberOfSeries(seriesPKs.size());
-                queryAttrs.setModalitiesInStudy(mods.toArray(new String[mods.size()]));
-                queryAttrs.setSOPClassesInStudy(cuids.toArray(new String[cuids.size()]));
-                queryAttrs.setRetrieveAETs(retrieveAETs);
-                queryAttrs.setAvailability(availability);
-                queryAttrs.setLastUpdateTime(lastUpdateTime);
-            }
-            return queryAttrs;
-        }
-    }
 }

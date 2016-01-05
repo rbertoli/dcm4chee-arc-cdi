@@ -65,11 +65,11 @@ import javax.persistence.TemporalType;
     query="SELECT a FROM ArchivingTask a "
         + "WHERE a.seriesInstanceUID = ?1 "),
 @NamedQuery(
-    name=ArchivingTask.FIND_READY_TO_ARCHIVE,
-    query="SELECT a FROM ArchivingTask a "
-        + "WHERE a.archivingTime <= CURRENT_TIMESTAMP AND a.delayReasonCode IS NULL "
-        + "ORDER BY a.archivingTime")
-})
+        name=ArchivingTask.FIND_READY_TO_ARCHIVE_BY_TIME,
+        query="SELECT a FROM ArchivingTask a "
+            + "WHERE a.archivingTime <= ?1 AND a.delayReasonCode IS NULL "
+            + "ORDER BY a.archivingTime")
+    })
 @Entity
 @Table(name = "archiving_task")
 public class ArchivingTask implements Serializable {
@@ -78,9 +78,9 @@ public class ArchivingTask implements Serializable {
 
     public static final String FIND_BY_SERIES_INSTANCE_UID =
             "ArchivingTask.findBySeriesInstanceUID";
-
-    public static final String FIND_READY_TO_ARCHIVE =
-            "ArchivingTask.findReadyToArchive";
+    
+    public static final String FIND_READY_TO_ARCHIVE_BY_TIME =
+            "ArchivingTask.findReadyToArchiveByTime";
 
     @Id
     @GeneratedValue(strategy=GenerationType.IDENTITY)
@@ -91,17 +91,17 @@ public class ArchivingTask implements Serializable {
     @Column(name = "series_iuid", updatable = false)
     private String seriesInstanceUID;
 
-    @Basic(optional = false)
+    @Basic(optional = true)
     @Column(name = "target_stg_group_id", updatable = false)
     private String targetStorageSystemGroupID;
+
+    @Basic(optional = true)
+    @Column(name = "target_external_device", updatable = false)
+    private String targetExternalDevice;
 
     @Basic(optional = false)
     @Column(name = "source_stg_group_id", updatable = false)
     private String sourceStorageSystemGroupID;
-
-    @Basic(optional = false)
-    @Column(name = "target_name", updatable = false)
-    private String targetName;
 
     @Basic(optional = false)
     @Temporal(TemporalType.TIMESTAMP)
@@ -155,13 +155,12 @@ public class ArchivingTask implements Serializable {
     public void setSourceStorageSystemGroupID(String sourceStorageSystemGroupID) {
         this.sourceStorageSystemGroupID = sourceStorageSystemGroupID;
     }
-
-    public String getTargetName() {
-        return targetName;
+    public String getTargetExternalDevice() {
+        return targetExternalDevice;
     }
 
-    public void setTargetName(String targetName) {
-        this.targetName = targetName;
+    public void setTargetExternalDevice(String targetExternalDevice) {
+        this.targetExternalDevice = targetExternalDevice;
     }
 
     @Override
@@ -170,6 +169,7 @@ public class ArchivingTask implements Serializable {
                 + ", series=" + seriesInstanceUID
                 + ", sourceStorageGroupID=" + sourceStorageSystemGroupID
                 + ", targetStorageGroupID=" + targetStorageSystemGroupID
+                + ", targetExternalDevice=" + targetExternalDevice
                 + "]";
     }
 }

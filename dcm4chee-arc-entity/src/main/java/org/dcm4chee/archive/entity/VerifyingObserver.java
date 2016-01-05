@@ -38,25 +38,15 @@
 
 package org.dcm4chee.archive.entity;
 
-import java.io.Serializable;
-import java.util.Date;
-
-import javax.persistence.Basic;
-import javax.persistence.CascadeType;
-import javax.persistence.Column;
-import javax.persistence.Entity;
-import javax.persistence.GeneratedValue;
-import javax.persistence.GenerationType;
-import javax.persistence.Id;
-import javax.persistence.JoinColumn;
-import javax.persistence.ManyToOne;
-import javax.persistence.OneToOne;
-import javax.persistence.Table;
-
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.Tag;
 import org.dcm4che3.soundex.FuzzyStr;
-import org.dcm4che3.util.DateUtils;
+
+import javax.persistence.*;
+import java.io.Serializable;
+import java.util.Calendar;
+import java.util.Date;
+import java.util.GregorianCalendar;
 
 /**
  * @author Damien Evans <damien.daddy@gmail.com>
@@ -75,9 +65,9 @@ public class VerifyingObserver implements Serializable {
     @Column(name = "pk")
     private long pk;
 
-    @Basic(optional = false)
+    //@Basic(optional = false)
     @Column(name = "verify_datetime")
-    private String verificationDateTime;
+    private Date verificationDateTime;
 
     @OneToOne(cascade=CascadeType.ALL, orphanRemoval = true)
     @JoinColumn(name = "observer_name_fk")
@@ -89,19 +79,28 @@ public class VerifyingObserver implements Serializable {
 
     public VerifyingObserver() {}
 
-    public VerifyingObserver(Attributes attrs, FuzzyStr fuzzyStr) {
+    public VerifyingObserver(Attributes attrs, FuzzyStr fuzzyStr, String nullValue) {
         Date dt = attrs.getDate(Tag.VerificationDateTime);
-        verificationDateTime = DateUtils.formatDT(null, dt);
+        if (dt != null) {
+            Calendar adjustedDateTimeCal = new GregorianCalendar();
+            adjustedDateTimeCal.setTime(dt);
+            adjustedDateTimeCal.set(Calendar.MILLISECOND, 0);
+            verificationDateTime = adjustedDateTimeCal.getTime();
+        }
         verifyingObserverName = PersonName.valueOf(
-                attrs.getString(Tag.VerifyingObserverName), fuzzyStr, null);
+                attrs.getString(Tag.VerifyingObserverName), fuzzyStr, nullValue, null);
     }
 
     public long getPk() {
         return pk;
     }
 
-    public String getVerificationDateTime() {
+    public Date getVerificationDateTime() {
         return verificationDateTime;
+    }
+
+    public void setVerificationDateTime(Date verificationDateTime) {
+        this.verificationDateTime = verificationDateTime;
     }
 
     public PersonName getVerifyingObserverName() {

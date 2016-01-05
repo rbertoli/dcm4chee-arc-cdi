@@ -39,14 +39,11 @@
 package org.dcm4chee.archive.audit;
 
 import java.util.ArrayList;
-import java.util.Calendar;
 import java.util.HashMap;
 import java.util.List;
 
 import javax.enterprise.context.ApplicationScoped;
 import javax.enterprise.event.Observes;
-import javax.inject.Inject;
-import javax.management.Query;
 
 import org.dcm4che.archive.audit.message.PixQueryAudit;
 import org.dcm4che.archive.audit.message.QueryAudit;
@@ -54,16 +51,16 @@ import org.dcm4che.archive.audit.message.RetrieveAudit;
 import org.dcm4che.archive.audit.message.SecurityAlertAudit;
 import org.dcm4che.archive.audit.message.StartStopAudit;
 import org.dcm4che.archive.audit.message.StoreAudit;
-import org.dcm4che3.audit.AuditMessages;
-import org.dcm4che3.audit.AuditMessages.*;
 import org.dcm4che3.audit.AuditMessage;
-import org.dcm4che3.data.Attributes;
+import org.dcm4che3.audit.AuditMessages.EventActionCode;
+import org.dcm4che3.audit.AuditMessages.EventID;
+import org.dcm4che3.audit.AuditMessages.EventOutcomeIndicator;
 import org.dcm4che3.data.Tag;
 import org.dcm4che3.net.Device;
 import org.dcm4che3.net.audit.AuditLogger;
-import org.dcm4che3.net.service.InstanceLocator;
 import org.dcm4chee.archive.ArchiveServiceStarted;
 import org.dcm4chee.archive.ArchiveServiceStopped;
+import org.dcm4chee.archive.conf.StoreAction;
 import org.dcm4chee.archive.dto.ArchiveInstanceLocator;
 import org.dcm4chee.archive.event.ConnectionEvent;
 import org.dcm4chee.archive.event.StartStopReloadEvent;
@@ -90,6 +87,7 @@ public class AuditObserver {
 
     private static final String AUDIT_MESSAGES_SUCCESS = "SuccessAudits";
     private static final String AUDIT_MESSAGES_FAILURE = "FailedAudits";
+    private static final String AUDIT_MESSAGES_IGNORED = "IgnoredAudits";
 
     protected static final Logger LOG = LoggerFactory
             .getLogger(AuditObserver.class);
@@ -100,16 +98,16 @@ public class AuditObserver {
         AuditLogger logger = getLogger(session.getDevice());
         String studyID = context.getAttributes()
                 .getString(Tag.StudyInstanceUID);
-
-        HashMap<String, StoreAudit> auditMap = getOrCreateAuditsMap(session,
-                context.isFail());
+        StoreAction storeAction = context.getStoreAction();
+        HashMap<String, StoreAudit> auditMap = getOrCreateAuditsMap(session, storeAction);
 
         if (auditMap.get(studyID) == null)
             auditMap.put(
                     studyID,
                     new StoreAudit(session.getRemoteAET(), session.getSource(), 
-                            context.getAttributes(), context
-                            .isFail() ? EventOutcomeIndicator.SeriousFailure
+                            context.getAttributes(),
+                            storeAction == StoreAction.IGNORE ? EventActionCode.Read : EventActionCode.Create,
+                            storeAction == StoreAction.FAIL ? EventOutcomeIndicator.SeriousFailure
                             : EventOutcomeIndicator.Success, logger));
         else {
             StoreAudit existingAudit = auditMap.get(studyID);
@@ -117,23 +115,19 @@ public class AuditObserver {
         }
     }
 
-    public void receiveStoreSessionClosed(
+    @SuppressWarnings("unchecked")
+	public void receiveStoreSessionClosed(
             @Observes @StoreSessionClosed StoreSession session) {
 
         AuditLogger logger = getLogger(session.getDevice());
-        
+        HashMap<String, StoreAudit> msgs;
         // send all the audits at once
-        HashMap<String, StoreAudit> success = (HashMap<String, StoreAudit>) session
-                .getProperty(AUDIT_MESSAGES_SUCCESS);
-        if (success != null)
-            for (String studyUID : success.keySet())
-                sendAuditMessage(success.get(studyUID), logger);
-
-        HashMap<String, StoreAudit> failures = (HashMap<String, StoreAudit>) session
-                .getProperty(AUDIT_MESSAGES_FAILURE);
-        if (failures != null)
-            for (String studyUID : failures.keySet())
-                sendAuditMessage(failures.get(studyUID), logger);
+        for (String msgType : new String[]{AUDIT_MESSAGES_SUCCESS, AUDIT_MESSAGES_FAILURE, AUDIT_MESSAGES_IGNORED}) {
+        	msgs = (HashMap<String, StoreAudit>) session.getProperty(msgType);
+        	if (msgs != null)
+        		for (StoreAudit msg : msgs.values())
+        			sendAuditMessage(msg, logger);
+        }
     }
     
     public void receiveArchiveServiceStarted(
@@ -160,7 +154,7 @@ public class AuditObserver {
         sendAuditMessage (new RetrieveAudit(event.getSource(),
                 event.getDestination(), event.getRequestor(),
                 event.getInstances(),
-                EventID.BeginTransferringDICOMInstances,
+                EventID.BeginTransferringDICOMInstances, EventActionCode.Execute,
                 EventOutcomeIndicator.Success, logger), logger);
     }
     
@@ -185,7 +179,7 @@ public class AuditObserver {
             sendAuditMessage (new RetrieveAudit(event.getSource(),
                     event.getDestination(), event.getRequestor(),
                     success,
-                    EventID.DICOMInstancesTransferred,
+                    EventID.DICOMInstancesTransferred, EventActionCode.Read,
                     EventOutcomeIndicator.Success, logger), logger);
         
         if (event.getFailed()!=null && event.getFailed().size()>0) {
@@ -194,13 +188,13 @@ public class AuditObserver {
                 sendAuditMessage (new RetrieveAudit(event.getSource(),
                         event.getDestination(), event.getRequestor(),
                         event.getFailed(),
-                        EventID.DICOMInstancesTransferred,
+                        EventID.DICOMInstancesTransferred, EventActionCode.Read,
                         EventOutcomeIndicator.MinorFailure, logger), logger);
             else //all the instance are failed: major failure
                 sendAuditMessage (new RetrieveAudit(event.getSource(),
                         event.getDestination(), event.getRequestor(),
                         event.getFailed(),
-                        EventID.DICOMInstancesTransferred,
+                        EventID.DICOMInstancesTransferred, EventActionCode.Read,
                         EventOutcomeIndicator.MajorFailure, logger), logger);
         }
     } 
@@ -224,8 +218,9 @@ public class AuditObserver {
     }
     
     private HashMap<String, StoreAudit> getOrCreateAuditsMap(
-            StoreSession session, boolean fail) {
-        String mapType = fail ? AUDIT_MESSAGES_FAILURE : AUDIT_MESSAGES_SUCCESS;
+            StoreSession session, StoreAction action) {
+        String mapType = action == StoreAction.FAIL ? AUDIT_MESSAGES_FAILURE : 
+        	action == StoreAction.IGNORE ? AUDIT_MESSAGES_IGNORED : AUDIT_MESSAGES_SUCCESS;
 
         // if not existing, create a new map for audits (failed or success)
         if (session.getProperty(mapType) == null)

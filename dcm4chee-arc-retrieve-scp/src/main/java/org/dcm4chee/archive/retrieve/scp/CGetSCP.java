@@ -38,12 +38,6 @@
 
 package org.dcm4chee.archive.retrieve.scp;
 
-import java.util.EnumSet;
-import java.util.List;
-
-import javax.enterprise.event.Event;
-import javax.inject.Inject;
-
 import org.dcm4che3.conf.api.IApplicationEntityCache;
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.IDWithIssuer;
@@ -75,6 +69,12 @@ import org.dcm4chee.archive.retrieve.impl.RetrieveAfterSendEvent;
 import org.dcm4chee.archive.retrieve.impl.RetrieveBeforeSendEvent;
 import org.dcm4chee.archive.store.scu.CStoreSCUService;
 import org.dcm4chee.archive.store.scu.impl.CStoreSCUImpl;
+import org.dcm4chee.task.WeightWatcher;
+
+import javax.enterprise.event.Event;
+import javax.inject.Inject;
+import java.util.EnumSet;
+import java.util.List;
 
 /**
  * @author Gunter Zeilinger <gunterze@gmail.com>
@@ -99,6 +99,9 @@ public class CGetSCP extends BasicCGetSCP {
 
     @Inject
     private IApplicationEntityCache aeCache;
+
+    @Inject
+    private WeightWatcher weightWatcher;
 
     public CGetSCP(String sopClass, String... qrLevels) {
         super(sopClass);
@@ -125,16 +128,6 @@ public class CGetSCP extends BasicCGetSCP {
         try {
             QueryParam queryParam = aeExt.getQueryParam(queryOpts,
                     accessControlIDs());
-            // ApplicationEntity sourceAE = aeCache.get(as.getRemoteAET());
-            // if (sourceAE != null)
-            // queryParam.setDefaultIssuer(sourceAE.getDevice());
-            // IDWithIssuer pid = IDWithIssuer.fromPatientIDWithIssuer(keys);
-            // if (pid != null && pid.getIssuer() == null)
-            // pid.setIssuer(queryParam.getDefaultIssuerOfPatientID());
-            // IDWithIssuer[] pids = Archive.getInstance().pixQuery(ae, pid);
-            // IDWithIssuer[] pids = pid != null
-            // ? new IDWithIssuer[]{ pid }
-            // : IDWithIssuer.EMPTY;
             ApplicationEntity remoteAE = aeCache.get(as.getRemoteAET());
             RetrieveContext context = retrieveService.createRetrieveContext(
                     retrieveService, as.getRemoteAET(), aeExt);
@@ -147,15 +140,11 @@ public class CGetSCP extends BasicCGetSCP {
                 return null;
 
             CStoreSCU<ArchiveInstanceLocator> cstorescu = new CStoreSCUImpl(ae,
-                    remoteAE, ServiceType.GETSERVICE, storescuService);
+                    remoteAE, ServiceType.GETSERVICE, storescuService, weightWatcher);
             BasicRetrieveTask<ArchiveInstanceLocator> retrieveTask = new 
                     BasicRetrieveTask<ArchiveInstanceLocator>(
                     Dimse.C_GET_RQ, as, pc, rq, matches, as, cstorescu);
-            // if (sourceAE != null)
-            // retrieveTask.setDestinationDevice(sourceAE.getDevice());
             retrieveTask.setSendPendingRSP(aeExt.isSendPendingCGet());
-            // retrieveTask.setReturnOtherPatientIDs(aeExt.isReturnOtherPatientIDs());
-            // retrieveTask.setReturnOtherPatientNames(aeExt.isReturnOtherPatientNames());
 
             retrieveBeforeEvent.select(new ServiceQualifier(ServiceType.GETSERVICE))
             .fire(new RetrieveBeforeSendEvent(

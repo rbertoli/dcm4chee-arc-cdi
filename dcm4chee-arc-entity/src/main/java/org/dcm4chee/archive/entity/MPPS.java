@@ -38,9 +38,10 @@
 package org.dcm4chee.archive.entity;
 
 import java.io.Serializable;
+import java.util.Calendar;
 import java.util.Date;
+import java.util.GregorianCalendar;
 
-import javax.persistence.Basic;
 import javax.persistence.CascadeType;
 import javax.persistence.Column;
 import javax.persistence.Entity;
@@ -56,10 +57,10 @@ import javax.persistence.OneToOne;
 import javax.persistence.PrePersist;
 import javax.persistence.PreUpdate;
 import javax.persistence.Table;
-import javax.persistence.Transient;
 import javax.persistence.Version;
 
 import org.dcm4che3.data.Attributes;
+import org.dcm4che3.data.DatePrecision;
 import org.dcm4che3.data.Tag;
 import org.dcm4che3.util.DateUtils;
 
@@ -72,18 +73,27 @@ import org.dcm4che3.util.DateUtils;
  */
 @NamedQueries({
     @NamedQuery(
+            name=MPPS.FIND_BY_SOP_INSTANCE_UID_EAGER,
+            query="SELECT mpps FROM MPPS mpps JOIN FETCH mpps.attributesBlob  WHERE mpps.sopInstanceUID = ?1"),
+    @NamedQuery(
             name="MPPS.findBySOPInstanceUID",
-            query="SELECT mpps FROM MPPS mpps WHERE mpps.sopInstanceUID = ?1)"),
+            query="SELECT mpps FROM MPPS mpps WHERE mpps.sopInstanceUID = ?1"),
     @NamedQuery(
             name="MPPS.findBySOPInstanceUIDs",
-            query="SELECT mpps FROM MPPS mpps WHERE mpps.sopInstanceUID IN :idList)"),
+            query="SELECT mpps FROM MPPS mpps WHERE mpps.sopInstanceUID IN :idList"),
     @NamedQuery(
             name="MPPS.deleteBySOPInstanceUIDs",
-            query="DELETE FROM MPPS mpps WHERE mpps.sopInstanceUID IN :idList)"),            
+            query="DELETE FROM MPPS mpps WHERE mpps.sopInstanceUID IN :idList"),
 })
 @Entity
 @Table(name = "mpps")
 public class MPPS implements Serializable {
+
+    public boolean discontinuedForReason(Code reasonCode) {
+        return getStatus() == Status.DISCONTINUED
+                && getDiscontinuationReasonCode() != null
+                && getDiscontinuationReasonCode().equals(reasonCode);
+    }
 
     public enum Status {
         IN_PROGRESS, COMPLETED, DISCONTINUED;
@@ -91,6 +101,8 @@ public class MPPS implements Serializable {
 
     public static final String FIND_BY_SOP_INSTANCE_UID =
             "MPPS.findBySOPInstanceUID";
+    public static final String FIND_BY_SOP_INSTANCE_UID_EAGER =
+            "MPPS.findBySOPInstanceUIDEager";
     public static final String FIND_BY_SOP_INSTANCE_UIDs =
             "MPPS.findBySOPInstanceUIDs";
     public static final String DELETE_BY_SOP_INSTANCE_UIDs =
@@ -111,38 +123,34 @@ public class MPPS implements Serializable {
     @Column(name = "version")
     private long version;  
 
-    @Basic(optional = false)
+    //@Basic(optional = false)
     @Column(name = "created_time", updatable = false)
     private Date createdTime;
 
-    @Basic(optional = false)
+    //@Basic(optional = false)
     @Column(name = "updated_time")
     private Date updatedTime;
 
-    @Basic(optional = false)
-    @Column(name = "mpps_iuid", updatable = true)
+    //@Basic(optional = false)
+    @Column(name = "mpps_iuid", updatable = true, unique = true)
     private String sopInstanceUID;
 
-    @Basic(optional = false)
-    @Column(name = "pps_start_date")
-    private String startDate;
+    //@Basic(optional = false)
+    @Column(name = "pps_start", nullable=true)
+    private Date startDateTime;
 
-    @Basic(optional = false)
-    @Column(name = "pps_start_time")
-    private String startTime;
-
-    @Basic(optional = false)
+    //@Basic(optional = false)
     @Column(name = "station_aet")
     private String performedStationAET;
 
-    @Basic(optional = false)
+    //@Basic(optional = false)
     @Column(name = "modality")
     private String modality;
 
     @Column(name = "accession_no")
     private String accessionNumber;
 
-    @Basic(optional = false)
+    //@Basic(optional = false)
     @Column(name = "mpps_status")
     private Status status;
 
@@ -178,12 +186,8 @@ public class MPPS implements Serializable {
         this.sopInstanceUID = sopInstanceUID;
     }
 
-    public String getStartDate() {
-        return startDate;
-    }
-
-    public String getStartTime() {
-        return startTime;
+    public Date getStartDateTime() {
+        return startDateTime;
     }
 
     public String getPerformedStationAET() {
@@ -232,8 +236,7 @@ public class MPPS implements Serializable {
                 + ", iuid=" + sopInstanceUID
                 + ", status=" + status
                 + ", accno=" + accessionNumber
-                + ", startDate=" + startDate
-                + ", startTime=" + startTime
+                + ", startDateTime=" + startDateTime.toString()
                 + ", mod=" + modality
                 + ", aet=" + performedStationAET
                 + "]";
@@ -259,18 +262,14 @@ public class MPPS implements Serializable {
         return attributesBlob.getAttributes();
     }
 
-    public void setAttributes(Attributes attrs) {
+    public void setAttributes(Attributes attrs, String nullValue) {
         
-        Date dt = attrs.getDate(Tag.PerformedProcedureStepStartDateAndTime);
+        Date dt = attrs.getDate(Tag.PerformedProcedureStepStartDateAndTime, new DatePrecision(Calendar.SECOND));
         if (dt != null) {
-            startDate = DateUtils.formatDA(null, dt);
-            startTime = 
-                attrs.containsValue(Tag.PerformedProcedureStepStartDate)
-                    ? DateUtils.formatTM(null, dt)
-                    : "*";
-        } else {
-            startDate = "*";
-            startTime = "*";
+            Calendar adjustedDateTimeCal = new GregorianCalendar();
+            adjustedDateTimeCal.setTime(dt);
+            adjustedDateTimeCal.set(Calendar.MILLISECOND, 0);
+            startDateTime = adjustedDateTimeCal.getTime();
         }
         this.performedStationAET = attrs.getString(Tag.PerformedStationAETitle);
         this.modality = attrs.getString(Tag.Modality);
@@ -278,13 +277,22 @@ public class MPPS implements Serializable {
                 Tag.ScheduledStepAttributesSequence);
         if (ssa != null)
             this.accessionNumber = ssa.getString(Tag.AccessionNumber);
-        String s = attrs.getString(Tag.PerformedProcedureStepStatus);
-        if (s != null)
-            status = Status.valueOf(s.replace(' ', '_'));
-        
+
+        Status status = getMPPSStatus(attrs);
+
+        if (status != null)
+            this.status = status;
+
         if (attributesBlob == null)
             attributesBlob = new AttributesBlob(attrs);
         else
             attributesBlob.setAttributes(attrs);
+    }
+
+    public static Status getMPPSStatus(Attributes attrs) {
+        String s = attrs.getString(Tag.PerformedProcedureStepStatus);
+        Status status = null;
+        if (s != null) status = Status.valueOf(s.replace(' ', '_'));
+        return status;
     }
 }

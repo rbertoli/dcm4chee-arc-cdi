@@ -39,8 +39,7 @@
 package org.dcm4chee.archive.stgcmt.scp.impl;
 
 import java.io.IOException;
-import java.util.Date;
-import java.util.List;
+import java.util.*;
 
 import javax.annotation.Resource;
 import javax.enterprise.context.ApplicationScoped;
@@ -70,6 +69,7 @@ import org.dcm4che3.net.Association;
 import org.dcm4che3.net.Device;
 import org.dcm4che3.net.Dimse;
 import org.dcm4che3.net.DimseRSP;
+import org.dcm4che3.net.DimseRSPHandler;
 import org.dcm4che3.net.Status;
 import org.dcm4che3.net.TransferCapability;
 import org.dcm4che3.net.TransferCapability.Role;
@@ -78,18 +78,16 @@ import org.dcm4che3.net.pdu.PresentationContext;
 import org.dcm4che3.net.pdu.RoleSelection;
 import org.dcm4che3.net.service.DicomServiceException;
 import org.dcm4che3.util.DateUtils;
-import org.dcm4che3.util.UIDUtils;
 import org.dcm4chee.archive.conf.ArchiveAEExtension;
 import org.dcm4chee.archive.dto.ArchiveInstanceLocator;
-import org.dcm4chee.archive.dto.ServiceQualifier;
-import org.dcm4chee.archive.dto.ServiceType;
-import org.dcm4chee.archive.entity.StoreVerifyDimse;
 import org.dcm4chee.archive.stgcmt.scp.CommitEvent;
 import org.dcm4chee.archive.stgcmt.scp.StgCmtService;
 import org.dcm4chee.storage.RetrieveContext;
 import org.dcm4chee.storage.conf.StorageDeviceExtension;
 import org.dcm4chee.storage.conf.StorageSystem;
+import org.dcm4chee.storage.conf.SyncPolicy;
 import org.dcm4chee.storage.service.RetrieveService;
+import org.dcm4chee.storage.service.StorageService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -106,7 +104,7 @@ public class StgCmtServiceImpl implements StgCmtService {
     private static final Logger LOG = LoggerFactory
             .getLogger(StgCmtServiceImpl.class);
 
-    @Resource(mappedName = "java:/ConnectionFactory")
+    @Resource(mappedName = "java:/JmsXA")
     private ConnectionFactory connFactory;
  
     @Resource(mappedName = "java:/queue/stgcmtscp")
@@ -117,6 +115,9 @@ public class StgCmtServiceImpl implements StgCmtService {
 
     @Inject
     private RetrieveService storageRetrieveService;
+
+    @Inject
+    private StorageService storageService;
 
     @Inject
     private IApplicationEntityCache aeCache;
@@ -133,14 +134,16 @@ public class StgCmtServiceImpl implements StgCmtService {
     }
 
     @Override
-    public Attributes calculateResult(Attributes actionInfo) {
+    public Attributes calculateResult(Attributes actionInfo) throws IOException {
 
         List<Tuple> foundMatches = stgCmtEJB.lookupMatches(actionInfo);
         return stgCmtEJB.calculateResult(checkForDigestAndAdjust(foundMatches),
                 actionInfo);
     }
 
-    private List<Tuple> checkForDigestAndAdjust(List<Tuple> foundMatches) {
+    private List<Tuple> checkForDigestAndAdjust(List<Tuple> foundMatches) throws IOException {
+
+        Map<StorageSystem, List<String>> committed = new HashMap<>();
 
         for (java.util.Iterator<Tuple> iter = foundMatches.iterator(); iter
                 .hasNext();) {
@@ -157,9 +160,13 @@ public class StgCmtServiceImpl implements StgCmtService {
             RetrieveContext ctx = storageRetrieveService
                     .createRetrieveContext(storageSystem);
             try {
-                if (!storageRetrieveService.calculateDigestAndMatch(ctx,
-                        digest, filePath)) {
+                if (!storageRetrieveService.calculateDigestAndMatch(ctx, digest, filePath)) {
                     iter.remove();
+                }
+                else {
+                    if (committed.get(storageSystem) == null)
+                        committed.put(storageSystem,new ArrayList<String>());
+                    committed.get(storageSystem).add(filePath);
                 }
             } catch (IOException e) {
                 LOG.error(
@@ -169,10 +176,19 @@ public class StgCmtServiceImpl implements StgCmtService {
 
             }
         }
+
+        //sync if configured
+        for (StorageSystem storageSystem : committed.keySet()) {
+            if (storageSystem.getSyncPolicy().equals(SyncPolicy.ON_STORAGE_COMMITMENT)) {
+                storageService.syncFiles(storageSystem,committed.get(storageSystem));
+            }
+        }
+
         return foundMatches;
 
     }
 
+    @Override
     public void scheduleNEventReport(String localAET, String remoteAET,
             Attributes eventInfo, int retries, long delay) {
         try {
@@ -183,6 +199,7 @@ public class StgCmtServiceImpl implements StgCmtService {
                 MessageProducer producer = session
                         .createProducer(stgcmtSCPQueue);
                 ObjectMessage msg = session.createObjectMessage(eventInfo);
+                msg.setStringProperty("TRANSACTION_UID", eventInfo.getString(Tag.TransactionUID));
                 msg.setStringProperty("LocalAET", localAET);
                 msg.setStringProperty("RemoteAET", remoteAET);
                 msg.setIntProperty("Retries", retries);
@@ -262,27 +279,26 @@ public class StgCmtServiceImpl implements StgCmtService {
     }
 
     @Override
-    public void sendNActionRequest(String localAET, String remoteAET,
-            List<ArchiveInstanceLocator> insts, String clientID, int retries) {
+    public N_ACTION_REQ_STATE sendNActionRequest(String localAET, String remoteAET,
+            List<ArchiveInstanceLocator> insts, String transactionUID) {
 
         ApplicationEntity localAE = device.getApplicationEntity(localAET);
-
         if (localAE == null) {
-            LOG.warn(
-                    "Failed to send Storage Commitment Request to {} - no such local AE: {}",
-                    remoteAET, localAET);
-            return;
+            LOG.error("Invalid Storage Commitment Request [{} -> {}]: no such local AE: '{}'",
+                    localAET, remoteAET, localAET);
+            return N_ACTION_REQ_STATE.INVALID_REQ;
         }
+        
         TransferCapability tc = localAE.getTransferCapabilityFor(
                 UID.StorageCommitmentPushModelSOPClass,
                 TransferCapability.Role.SCU);
         if (tc == null) {
-            LOG.warn(
-                    "Failed to send Storage Commitment Request to {} - "
-                            + "local AE: {} does not support Storage Commitment Push Model in SCU Role",
-                    remoteAET, localAET);
-            return;
+            LOG.error("Invalid Storage Commitment Request [{}->{}]: "
+                    + "local AE '{}' does not support Storage Commitment Push Model in SCU Role",
+                    localAET, remoteAET, localAE);
+            return N_ACTION_REQ_STATE.INVALID_REQ;
         }
+        
         AAssociateRQ aarq = new AAssociateRQ();
         aarq.addPresentationContext(new PresentationContext(1,
                 UID.StorageCommitmentPushModelSOPClass, tc
@@ -290,20 +306,18 @@ public class StgCmtServiceImpl implements StgCmtService {
         aarq.addRoleSelection(new RoleSelection(
                 UID.StorageCommitmentPushModelSOPClass, true, false));
 
-        String transactionUID = clientID;
-
         Attributes action = createAction(insts, transactionUID);
 
+        N_ACTION_REQ_STATE requestState;
         try {
-            ApplicationEntity remoteAE = aeCache
-                    .findApplicationEntity(remoteAET);
+            ApplicationEntity remoteAE = aeCache.findApplicationEntity(remoteAET);
             Association as = localAE.connect(remoteAE, aarq);
             try {
-                DimseRSP rsp = as.naction(
-                        UID.StorageCommitmentPushModelSOPClass,
+                NActionRequestRSPHandler rspHandler = new NActionRequestRSPHandler(as.nextMessageID());
+                as.naction(UID.StorageCommitmentPushModelSOPClass,
                         UID.StorageCommitmentPushModelSOPInstance, 1, action,
-                        null);
-                rsp.next();
+                        null, rspHandler);
+                requestState = rspHandler.waitForResponse();
             } finally {
                 try {
                     as.release();
@@ -313,21 +327,36 @@ public class StgCmtServiceImpl implements StgCmtService {
                 }
             }
         } catch (Exception e) {
-            ArchiveAEExtension aeExt = localAE
-                    .getAEExtension(ArchiveAEExtension.class);
-            if (aeExt != null
-                    && retries < aeExt.getStorageCommitmentMaxRetries()) {
-                int delay = aeExt.getStorageCommitmentRetryInterval();
-                LOG.info(
-                        "Failed to send Storage Commitment Request to {} - retry in {}s: {}",
-                        remoteAET, delay, e);
-                scheduleNEventReport(localAET, remoteAET, action, retries + 1,
-                        delay * 1000L);
-            } else {
-                LOG.warn("Failed to send Storage Commitment Request to {}: {}",
-                        remoteAET, e);
+            LOG.error("Failed to send Storage Commitment Request [{}->{}]: {}", localAET, remoteAET, e.getMessage());
+            requestState = N_ACTION_REQ_STATE.SEND_REQ_FAILED;
+        }
+        
+        return requestState;
+    }
+    
+    private static class NActionRequestRSPHandler extends DimseRSPHandler {
+        N_ACTION_REQ_STATE requestState = null;
+        
+        private NActionRequestRSPHandler(int msgId) {
+            super(msgId);
+        }
+        
+        @Override
+        public void onDimseRSP(Association as, Attributes cmd, Attributes data) {
+            requestState = (cmd.getInt(Tag.Status, -1) == Status.Success) ? N_ACTION_REQ_STATE.SEND_REQ_OK : N_ACTION_REQ_STATE.SEND_REQ_FAILED;
+            super.onDimseRSP(as, cmd, data);
+            synchronized(this) {
+                notifyAll();
             }
         }
+        
+        private synchronized N_ACTION_REQ_STATE waitForResponse() throws InterruptedException {
+            while (requestState == null) {
+                wait();
+            }
+            return requestState;
+        }
+        
     }
 
     private Attributes createAction(List<ArchiveInstanceLocator> insts,
@@ -380,15 +409,7 @@ public class StgCmtServiceImpl implements StgCmtService {
 
     @Override
     public void notify(CommitEvent commitEvt) {
-        if(stgCmtEJB.dimseEntryExists(commitEvt.getTransactionUID())) {
-            StoreVerifyDimse dimse = stgCmtEJB.getDimseEntry(commitEvt
-                    .getTransactionUID());
-            String service = dimse.getService();
-            commitEvent.select(new ServiceQualifier(ServiceType
-                    .valueOf(service))).fire(commitEvt);
-        }
-        else {
-            commitEvent.fire(commitEvt);
-        }
+        commitEvent.fire(commitEvt);
     }
+    
 }

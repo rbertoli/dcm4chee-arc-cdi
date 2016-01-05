@@ -38,13 +38,6 @@
 
 package org.dcm4chee.archive.retrieve.scp;
 
-import java.util.ArrayList;
-import java.util.EnumSet;
-import java.util.List;
-
-import javax.enterprise.event.Event;
-import javax.inject.Inject;
-
 import org.dcm4che3.conf.api.ConfigurationNotFoundException;
 import org.dcm4che3.conf.api.IApplicationEntityCache;
 import org.dcm4che3.conf.core.api.ConfigurationException;
@@ -84,8 +77,15 @@ import org.dcm4chee.archive.retrieve.impl.RetrieveAfterSendEvent;
 import org.dcm4chee.archive.retrieve.impl.RetrieveBeforeSendEvent;
 import org.dcm4chee.archive.store.scu.CStoreSCUService;
 import org.dcm4chee.archive.store.scu.impl.CStoreSCUImpl;
+import org.dcm4chee.task.WeightWatcher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import javax.enterprise.event.Event;
+import javax.inject.Inject;
+import java.util.ArrayList;
+import java.util.EnumSet;
+import java.util.List;
 
 /**
  * @author Gunter Zeilinger <gunterze@gmail.com>
@@ -110,6 +110,9 @@ public class CMoveSCP extends BasicCMoveSCP {
     
     @Inject
     private Event<RetrieveAfterSendEvent> retrieveAfterEvent;
+
+    @Inject
+    private WeightWatcher weightWatcher;
     
     public CMoveSCP(String sopClass, String... qrLevels) {
         super(sopClass);
@@ -129,9 +132,13 @@ public class CMoveSCP extends BasicCMoveSCP {
         boolean relational = queryOpts.contains(QueryOption.RELATIONAL);
         level.validateRetrieveKeys(keys, rootLevel, relational);
         String dest = rq.getString(Tag.MoveDestination);
+        ApplicationEntity destAE;
         try {
-            final ApplicationEntity destAE =
-                    aeCache.findApplicationEntity(dest);
+            destAE = aeCache.findApplicationEntity(dest);
+        } catch (ConfigurationException e) {
+            throw new DicomServiceException(Status.MoveDestinationUnknown, "Unknown Move Destination: " + dest);
+        }
+        try {
             ApplicationEntity ae = as.getApplicationEntity();
             ArchiveAEExtension arcAE = ae.getAEExtension(
                     ArchiveAEExtension.class);
@@ -158,7 +165,7 @@ public class CMoveSCP extends BasicCMoveSCP {
                 return null;
             
             CStoreSCU<ArchiveInstanceLocator> cstorescu = new CStoreSCUImpl (
-                    ae, destAE, ServiceType.MOVESERVICE, storescuService);
+                    ae, destAE, ServiceType.MOVESERVICE, storescuService, weightWatcher);
             AAssociateRQ aarq = makeAAssociateRQ(as.getLocalAET(), dest, matches);
             Association storeas = openStoreAssociation(as, destAE, aarq);
             BasicRetrieveTask<ArchiveInstanceLocator> retrieveTask = 
@@ -180,12 +187,8 @@ public class CMoveSCP extends BasicCMoveSCP {
                     matches));
             
             return retrieveTask;
-        } catch (ConfigurationNotFoundException e) {
-            throw new DicomServiceException(Status.MoveDestinationUnknown,
-                    "Unknown Move Destination: " + dest);
         } catch (Exception e) {
-            throw new DicomServiceException(Status
-                    .UnableToCalculateNumberOfMatches, e);
+            throw new DicomServiceException(Status.UnableToCalculateNumberOfMatches, e);
         }
     }
 

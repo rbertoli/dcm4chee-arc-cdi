@@ -38,6 +38,7 @@
 
 package org.dcm4chee.archive.conf;
 
+import org.dcm4che3.data.Issuer;
 import org.dcm4che3.soundex.FuzzyStr;
 
 import java.util.HashMap;
@@ -54,6 +55,8 @@ public class StoreParam {
     private String modifyingSystem;
     private PatientSelectorConfig patientSelectorConfig;
     private boolean deIdentifyLogs = false;
+    private String nullValueForQueryFields = null;
+    private Issuer issuerOfPatientID = null;
 
     public final boolean isStoreOriginalAttributes() {
         return storeOriginalAttributes;
@@ -101,5 +104,21 @@ public class StoreParam {
 
     public void setDeIdentifyLogs(boolean deIdentifyLogs) {
         this.deIdentifyLogs = deIdentifyLogs;
+    }
+
+    public String getNullValueForQueryFields() {
+        return nullValueForQueryFields;
+    }
+
+    public void setNullValueForQueryFields(String nullValueForQueryFields) {
+        this.nullValueForQueryFields = nullValueForQueryFields;
+    }
+
+    public Issuer getIssuerOfPatientID() {
+        return issuerOfPatientID;
+    }
+
+    public void setIssuerOfPatientID(Issuer issuerOfPatientID) {
+        this.issuerOfPatientID = issuerOfPatientID;
     }
 }

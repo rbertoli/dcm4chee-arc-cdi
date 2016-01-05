@@ -6,10 +6,18 @@
   <parent>
     <groupId>org.dcm4che.dcm4chee-arc</groupId>
     <artifactId>dcm4chee-arc-parent</artifactId>
-    <version>4.4.0.Beta1</version>
+    <version>4.5.0-SNAPSHOT</version>
   </parent>
   <artifactId>dcm4chee-arc-retrieve-scp</artifactId>
   <dependencies>
+    <dependency>
+      <groupId>org.dcm4che.dcm4chee-arc</groupId>
+      <artifactId>dcm4chee-arc-core</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.dcm4che.dcm4chee-arc</groupId>
+      <artifactId>dcm4chee-arc-api</artifactId>
+    </dependency>
     <dependency>
       <groupId>org.dcm4che.dcm4chee-arc</groupId>
       <artifactId>dcm4chee-arc-conf</artifactId>
@@ -23,6 +31,11 @@
     <dependency>
       <groupId>org.dcm4che.dcm4chee-arc</groupId>
       <artifactId>dcm4chee-arc-retrieve</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.dcm4che.dcm4chee-arc</groupId>
+      <artifactId>dcm4chee-arc-store-scu</artifactId>
       <version>${project.version}</version>
     </dependency>
     <dependency>

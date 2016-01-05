@@ -38,37 +38,12 @@
 
 package org.dcm4chee.archive.store.scu.impl;
 
-import java.io.IOException;
-import java.io.InterruptedIOException;
-import java.io.StringWriter;
-import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.Date;
-import java.util.List;
-
-import javax.annotation.Resource;
-import javax.enterprise.context.ApplicationScoped;
-import javax.enterprise.event.Event;
-import javax.enterprise.inject.Any;
-import javax.inject.Inject;
-import javax.jms.Connection;
-import javax.jms.ConnectionFactory;
-import javax.jms.JMSException;
-import javax.jms.MessageProducer;
-import javax.jms.ObjectMessage;
-import javax.jms.Queue;
-import javax.jms.Session;
-import javax.xml.transform.Templates;
-import javax.xml.transform.Transformer;
-import javax.xml.transform.stream.StreamResult;
-import javax.xml.transform.stream.StreamSource;
-
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.Tag;
 import org.dcm4che3.data.UID;
 import org.dcm4che3.io.SAXTransformer;
-import org.dcm4che3.io.SAXWriter;
 import org.dcm4che3.io.SAXTransformer.SetupTransformer;
+import org.dcm4che3.io.SAXWriter;
 import org.dcm4che3.net.ApplicationEntity;
 import org.dcm4che3.net.Association;
 import org.dcm4che3.net.Device;
@@ -90,24 +65,49 @@ import org.dcm4chee.archive.store.scu.CStoreSCUJMSMessage;
 import org.dcm4chee.archive.store.scu.CStoreSCUResponse;
 import org.dcm4chee.archive.store.scu.CStoreSCUService;
 import org.dcm4chee.storage.service.RetrieveService;
+import org.dcm4chee.task.WeightWatcher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import javax.annotation.Resource;
+import javax.enterprise.context.ApplicationScoped;
+import javax.enterprise.event.Event;
+import javax.enterprise.inject.Any;
+import javax.inject.Inject;
+import javax.jms.Connection;
+import javax.jms.ConnectionFactory;
+import javax.jms.JMSException;
+import javax.jms.MessageProducer;
+import javax.jms.ObjectMessage;
+import javax.jms.Queue;
+import javax.jms.Session;
+import javax.xml.transform.Templates;
+import javax.xml.transform.Transformer;
+import javax.xml.transform.stream.StreamResult;
+import javax.xml.transform.stream.StreamSource;
+import java.io.IOException;
+import java.io.InterruptedIOException;
+import java.io.StringWriter;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.List;
 
 /**
  * @author Umberto Cappellini <umberto.cappellini@agfa.com>
  * @author Hesham Elbadawi <bsdreko@gmail.com>
- * 
+ *
  */
 @ApplicationScoped
 public class CStoreSCUServiceImpl implements CStoreSCUService {
 
     private static final Logger LOG = LoggerFactory
             .getLogger(CStoreSCUServiceImpl.class);
-    
+
     @Inject
     private FetchForwardService fetchForwardService;
 
-    @Resource(mappedName = "java:/ConnectionFactory")
+    @Resource(mappedName = "java:/JmsXA")
     private ConnectionFactory connFactory;
 
     @Resource(mappedName = "java:/queue/storescu")
@@ -122,9 +122,12 @@ public class CStoreSCUServiceImpl implements CStoreSCUService {
 
     @Inject
     private RetrieveService storageRetrieveService;
-    
+
+    @Inject
+    private WeightWatcher weightWatcher;
+
     @Override
-    public void cstore(String messageID, CStoreSCUContext context, 
+    public void cstore(String messageID, CStoreSCUContext context,
             List<ArchiveInstanceLocator> insts, int priority)
             throws DicomServiceException {
         try {
@@ -139,18 +142,15 @@ public class CStoreSCUServiceImpl implements CStoreSCUService {
                     remoteAE.getAETitle(), insts);
             Association storeas = localAE.connect(remoteAE, aarq);
 
-            CStoreSCUImpl cstorescu = new CStoreSCUImpl(localAE, remoteAE
-                    , context.getService(), this);
-            BasicCStoreSCUResp storeRsp = cstorescu.cstore(insts, storeas
-                    ,priority);
+            CStoreSCUImpl cstorescu = new CStoreSCUImpl(localAE, remoteAE, context.getService(), this, weightWatcher);
+            BasicCStoreSCUResp storeRsp = cstorescu.cstore(insts, storeas, priority);
 
             storeSCUEvent.select(new ServiceQualifier(context.getService()))
-            .fire(new CStoreSCUResponse(storeRsp, insts,
-                    messageID, localAE.getAETitle(), remoteAE.getAETitle()));
+                    .fire(new CStoreSCUResponse(storeRsp, insts,
+                            messageID, localAE.getAETitle(), remoteAE.getAETitle()));
 
         } catch (Exception e) {
-            throw new DicomServiceException(Status.UnableToProcess, "Error: "
-                    + e.getMessage());
+            throw new DicomServiceException(Status.UnableToProcess, e);
         }
     }
 
@@ -186,6 +186,23 @@ public class CStoreSCUServiceImpl implements CStoreSCUService {
                 ObjectMessage msg = session
                         .createObjectMessage(new CStoreSCUJMSMessage(
                                 insts, context));
+
+                StringBuilder stiuid = new StringBuilder();
+                StringBuilder iuid = new StringBuilder();
+                ArrayList<String> studies = new ArrayList<String>();
+
+                for (ArchiveInstanceLocator i : insts) {
+                    if (!studies.contains(i.getStudyInstanceUID())) {
+                        if (stiuid.length() > 0) stiuid.append(',');
+                        stiuid.append(i.getStudyInstanceUID());
+                        studies.add(i.getStudyInstanceUID());
+                    }
+                    if (iuid.length() > 0) iuid.append(',');
+                    iuid.append(i.getStudyInstanceUID());
+                }
+
+                msg.setStringProperty("SOP_INSTANCE_UID", iuid.toString());
+                msg.setStringProperty("STUDY_UID", stiuid.toString());
                 msg.setIntProperty("Priority", priority);
                 msg.setIntProperty("Retries", retries);
                 msg.setStringProperty("MessageID", messageID);
@@ -205,16 +222,17 @@ public class CStoreSCUServiceImpl implements CStoreSCUService {
     public void coerceAttributes(Attributes attrs, CStoreSCUContext context)
             throws DicomServiceException {
         try {
-            Templates tpl = context.getArchiveAEExtension()
-                    .getAttributeCoercionTemplates(
-                            attrs.getString(Tag.SOPClassUID), Dimse.C_STORE_RQ,
-                            Role.SCU, context.getRemoteAE().getAETitle());
-            if (tpl != null)
-                attrs.addAll(SAXTransformer.transform(attrs, tpl, false, false,
-                        new CStoreSCUSetupTransformer(context.getLocalAE()
-                                .getAETitle(), context.getRemoteAE()
-                                .getAETitle())));
-
+            if (context.getRemoteAE()!=null) {
+                Templates tpl = context.getArchiveAEExtension()
+                        .getAttributeCoercionTemplates(
+                                attrs.getString(Tag.SOPClassUID), Dimse.C_STORE_RQ,
+                                Role.SCU, context.getRemoteAE().getAETitle());
+                if (tpl != null)
+                    attrs.addAll(SAXTransformer.transform(attrs, tpl, false, false,
+                            new CStoreSCUSetupTransformer(context.getLocalAE()
+                                    .getAETitle(), context.getRemoteAE()
+                                    .getAETitle())));
+            }
         } catch (Exception e) {
             throw new DicomServiceException(Status.UnableToProcess, e);
         }
@@ -227,7 +245,7 @@ public class CStoreSCUServiceImpl implements CStoreSCUService {
     }
 
     @Override
-    public ArchiveInstanceLocator applySuppressionCriteria(
+    public boolean isInstanceSuppressed(
             ArchiveInstanceLocator ref, Attributes attrs,
             String supressionCriteriaTemplateURI, CStoreSCUContext context) {
 
@@ -245,10 +263,9 @@ public class CStoreSCUServiceImpl implements CStoreSCUService {
                                 .getAETitle(), context.getRemoteAE()
                                 .getAETitle()));
                 wr.write(attrs);
-                eliminate = (resultWriter.toString()
-                        .compareToIgnoreCase("true") == 0 ? true : false);
+                eliminate = Boolean.valueOf(resultWriter.toString());
                 if (!eliminate) {
-                    return ref;
+                    return false;
                 }
 
                 if (LOG.isDebugEnabled()) {
@@ -259,29 +276,29 @@ public class CStoreSCUServiceImpl implements CStoreSCUService {
                             + ref.iuid
                             + " from response");
                 }
-                return null;
+                return true;
             }
 
         } catch (Exception e) {
-            LOG.error("Error applying supression criteria, {}", e);
-            return ref;
+            LOG.error("Error applying suppression criteria, {}", e);
+            return false;
         }
-        return ref;
+        return false;
     }
 
     @Override
-    public ArchiveInstanceLocator eliminateUnSupportedSOPClasses(
+    public boolean isSOPClassSuppressed(
             ArchiveInstanceLocator ref, CStoreSCUContext context) {
-        if (context.getRemoteAE() != null)
+        if (context.getRemoteAE() != null) {
             try {
-                // here in wado source and destination are the same
+                // for wado source and destination are the same
                 ArrayList<TransferCapability> aeTCs = new ArrayList<TransferCapability>(
                         context.getRemoteAE().getTransferCapabilitiesWithRole(
                                 Role.SCU));
 
                 for (TransferCapability supportedTC : aeTCs) {
-                    if (supportedTC.getSopClass().compareTo(ref.cuid) == 0) {
-                        return ref;
+                    if (supportedTC.getSopClass().equals(ref.cuid)) {
+                        return false;
                     }
                 }
 
@@ -289,12 +306,13 @@ public class CStoreSCUServiceImpl implements CStoreSCUService {
                     LOG.debug("Applying UnSupported SOP Class Elimination"
                             + "\nRemoving Referenced Instance: " + ref.iuid);
                 }
-                return null;
+                return true;
             } catch (Exception e) {
                 LOG.error("Exception while applying elimination, {}", e);
-                return ref;
+                return false;
             }
-        return ref;
+        }
+        return false;
     }
 
     @Override

@@ -47,14 +47,27 @@ import java.util.Date;
 
 /**
  * @author Gunter Zeilinger <gunterze@gmail.com>
- *
  */
+@NamedQueries({
+        @NamedQuery(
+                name = StudyQueryAttributes.FIND_BY_VIEW_ID_AND_STUDY_FK,
+                query = "SELECT sqa FROM StudyQueryAttributes sqa WHERE sqa.viewID = ?1 AND sqa.study.pk = ?2"),
+        @NamedQuery(
+                name = StudyQueryAttributes.CLEAN_FOR_STUDY,
+                query="DELETE FROM StudyQueryAttributes queryAttributes "
+                        + "WHERE queryAttributes.study.pk = ?1")
+})
 @Entity
-@Table(name = "study_query_attrs")
+@Table(name = "study_query_attrs",
+        uniqueConstraints = {@UniqueConstraint(columnNames = {"view_id","study_fk"})})
 public class StudyQueryAttributes {
 
+    public static final String FIND_BY_VIEW_ID_AND_STUDY_FK = "StudyQueryAttributes.findByViewIdAndStudyFK";
+    public static final String CLEAN_FOR_STUDY = "StudyQueryAttributes.cleanForStudy";
+
+
     @Id
-    @GeneratedValue(strategy=GenerationType.IDENTITY)
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
     @Column(name = "pk")
     private long pk;
 
@@ -78,6 +91,12 @@ public class StudyQueryAttributes {
 
     @Column(name = "availability")
     private Availability availability;
+
+    @Column(name = "num_visible_instances")
+    private int numberOfVisibleInstances;
+
+    @Column(name = "num_visible_series")
+    private int numberOfVisibleSeries;
 
     @Column(name = "last_update_time")
     private Date lastUpdateTime;
@@ -156,6 +175,22 @@ public class StudyQueryAttributes {
 
     public void setAvailability(Availability availability) {
         this.availability = availability;
+    }
+
+    public int getNumberOfVisibleInstances() {
+        return numberOfVisibleInstances;
+    }
+
+    public void setNumberOfVisibleInstances(int numberOfVisibleInstances) {
+        this.numberOfVisibleInstances = numberOfVisibleInstances;
+    }
+
+    public int getNumberOfVisibleSeries() {
+        return numberOfVisibleSeries;
+    }
+
+    public void setNumberOfVisibleSeries(int numberOfVisibleSeries) {
+        this.numberOfVisibleSeries = numberOfVisibleSeries;
     }
 
     public Date getLastUpdateTime() {

@@ -38,31 +38,66 @@
 
 package org.dcm4chee.archive.store;
 
-import java.nio.file.Path;
+import java.io.InputStream;
 import java.util.TimeZone;
+import java.util.concurrent.Future;
 
 import org.dcm4che3.data.Attributes;
 import org.dcm4chee.archive.conf.StoreAction;
-import org.dcm4chee.archive.entity.Location;
 import org.dcm4chee.archive.entity.Instance;
+import org.dcm4chee.archive.entity.Location;
 import org.dcm4chee.storage.StorageContext;
 
 /**
+ * StoreContext represents the internal state of the current StoreService.store( )
+ * operation. There is one StoreContext instance per received DICOM instance.
+ *
  * @author Gunter Zeilinger <gunterze@gmail.com>
  *
  */
 public interface StoreContext {
 
+    /**
+     * @return Original (unmodified) attributes that will be stored to the storage system. Never ever modify them!
+     */
+    Attributes getOriginalAttributes();
+
+    void setOriginalAttributes(Attributes originalAttributes);
+
+    /**
+     * @return Attributes that will be stored to the database. It is okay to modify those (coercion) - but only in a
+     * thread-safe way (i.e. only by the main store thread responsible for the database update, NOT by the asynchronous
+     * store-to-storage-system)
+     */
+    Attributes getAttributes();
+
+    void setAttributesForDatabase(Attributes attributesForDatabase);
+
+    /**
+     * @return Values from the original attributes that have been modified (coerced). Currently there are two main
+     * causes for coercion:
+     * <ol>
+     * <li>Explicit coercion happening within {@link StoreService#coerceAttributes}.</li>
+     * <li>Implicit coercion happening when an instance is stored to an existing series/study/patient or
+     * updates/replaces an existing instance. Depending on the configuration (see
+     * {@link org.dcm4chee.archive.conf.MetadataUpdateStrategy} and {@link StoreAction}) the information from the
+     * existing series/study/patient will be implicitly taken over to the newly stored instance.</li>
+     * </ol>
+     */
+    Attributes getCoercedOriginalAttributes();
+
+    void setCoercedOriginalAttributes(Attributes attributes);
+
+    Attributes getFileMetainfo();
+
+    void setFileMetainfo(Attributes fileMetainfo);
+
     StoreSession getStoreSession();
 
-    Path getSpoolFile();
+    String getSpoolFileSuffix();
 
-    void setSpoolFile(Path spoolFile);
+    void setSpoolFileSuffix(String spoolFileSuffix);
 
-    String getSpoolFileDigest();
-
-    void setSpoolFileDigest(String spoolFileDigest);
-    
     String getNoDBAttsDigest();
 
     void setNoDBAttsDigest(String noDBAttsDigest);    
@@ -71,24 +106,6 @@ public interface StoreContext {
 
     void setTransferSyntax(String transferSyntax);
 
-    Attributes getAttributes();
-
-    void setAttributes(Attributes attributes);
-
-    Attributes getCoercedOriginalAttributes();
-
-    void setCoercedOrginalAttributes(Attributes attributes);
-
-    String getStoragePath();
-
-    void setStoragePath(String storagePath);
-
-    String calcMetaDataStoragePath();
-
-    StorageContext getStorageContext();
-
-    void setStorageContext(StorageContext storageContext);
-
     StoreAction getStoreAction();
 
     void setStoreAction(StoreAction action);
@@ -96,14 +113,6 @@ public interface StoreContext {
     Location getFileRef();
 
     void setFileRef(Location createFileRef);
-
-    String getFinalFileDigest();
-
-    void setFinalFileDigest(String finalFileDigest);
-
-    long getFinalFileSize();
-
-    void setFinalFileSize(long size);
 
     Instance getInstance();
 
@@ -121,19 +130,34 @@ public interface StoreContext {
     
     void setThrowable(Throwable t);
 
-    String calcStoragePath();
-
     TimeZone getSourceTimeZone();
 
     void setSourceTimeZone(TimeZone sourceTimeZone);
 
     String getSourceTimeZoneID();
 
-    String getMetaDataStoragePath();
-
-    void setMetaDataStoragePath(String storagePath);
-
     boolean isFetch();
 
     void setFetch(boolean fetch);
+
+    InputStream getInputStream();
+
+    void setInputStream(InputStream inputStream);
+
+    StorageContext getSpoolingContext();
+
+    void setSpoolingContext(StorageContext spoolingContext);
+
+    Future<StorageContext> getBulkdataContext();
+
+    void setBulkdataContext(Future<StorageContext> bulkdataContext);
+
+    Future<StorageContext> getMetadataContext();
+
+    void setMetadataContext(Future<StorageContext> metadataContext);
+
+    void setOldNONEIOCMChangeUID(String oldNONEIOCMChangeUID);
+
+    String getOldNONEIOCMChangeUID();
+    
 }

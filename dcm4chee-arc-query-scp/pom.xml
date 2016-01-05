@@ -3,7 +3,7 @@
   <parent>
     <groupId>org.dcm4che.dcm4chee-arc</groupId>
     <artifactId>dcm4chee-arc-parent</artifactId>
-    <version>4.4.0.Beta1</version>
+    <version>4.5.0-SNAPSHOT</version>
   </parent>
   <artifactId>dcm4chee-arc-query-scp</artifactId>
   <dependencies>
@@ -13,6 +13,10 @@
       <version>${project.version}</version>
     </dependency>
     <dependency>
+      <groupId>org.dcm4che.dcm4chee-monitoring</groupId>
+      <artifactId>dcm4chee-monitoring-api</artifactId>
+    </dependency>
+    <dependency>
       <groupId>org.dcm4che.dcm4chee-arc</groupId>
       <artifactId>dcm4chee-arc-query</artifactId>
       <version>${project.version}</version>
@@ -20,6 +24,10 @@
     <dependency>
       <groupId>org.dcm4che</groupId>
       <artifactId>dcm4che-conf-api</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.dcm4che</groupId>
+      <artifactId>dcm4che-conf-core-api</artifactId>
     </dependency>
   </dependencies>
   <build>

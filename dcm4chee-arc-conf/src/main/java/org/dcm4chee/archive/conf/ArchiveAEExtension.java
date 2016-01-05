@@ -38,32 +38,27 @@
 
 package org.dcm4chee.archive.conf;
 
-import java.util.ArrayList;
-import java.util.EnumSet;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-
-import javax.xml.transform.Templates;
-import javax.xml.transform.TransformerConfigurationException;
-
 import org.dcm4che3.conf.api.AttributeCoercion;
 import org.dcm4che3.conf.api.AttributeCoercions;
+import org.dcm4che3.conf.api.extensions.ReconfiguringIterator;
 import org.dcm4che3.conf.core.api.ConfigurableClass;
 import org.dcm4che3.conf.core.api.ConfigurableProperty;
+import org.dcm4che3.conf.core.api.ConfigurableProperty.ConfigurablePropertyType;
 import org.dcm4che3.conf.core.api.LDAP;
-import org.dcm4che3.conf.api.extensions.ReconfiguringIterator;
 import org.dcm4che3.imageio.codec.CompressionRule;
 import org.dcm4che3.imageio.codec.CompressionRules;
 import org.dcm4che3.io.TemplatesCache;
-import org.dcm4che3.net.AEExtension;
-import org.dcm4che3.net.Dimse;
-import org.dcm4che3.net.QueryOption;
-import org.dcm4che3.net.TransferCapability;
+import org.dcm4che3.net.*;
 import org.dcm4che3.net.TransferCapability.Role;
 import org.dcm4che3.util.StringUtils;
 import org.dcm4chee.archive.dto.ReferenceUpdateOnRetrieveScope;
 import org.dcm4chee.storage.conf.Availability;
+
+import javax.xml.transform.Templates;
+import javax.xml.transform.TransformerConfigurationException;
+import java.util.ArrayList;
+import java.util.EnumSet;
+import java.util.List;
 
 /**
  * @author Gunter Zeilinger <gunterze@gmail.com>
@@ -78,6 +73,9 @@ public class ArchiveAEExtension extends AEExtension {
 
     public static final String DEF_RETRY_INTERVAL = "60";
 
+    @ConfigurableProperty(type = ConfigurablePropertyType.OptimisticLockingHash)
+    private String olockHash;
+
     @ConfigurableProperty(name = "dcmModifyingSystem")
     private String modifyingSystem;
 
@@ -89,6 +87,9 @@ public class ArchiveAEExtension extends AEExtension {
 
     @ConfigurableProperty(name = "dcmStorageSystemGroupID")
     private String storageSystemGroupID;
+
+    @ConfigurableProperty(name = "dcmStorageSystemGroupType")
+    private String storageSystemGroupType;
 
     @ConfigurableProperty(name= "dcmQidoClientAcceptMediaType", defaultValue="application/json")
     private String qidoClientAcceptType = "application/json";
@@ -136,14 +137,8 @@ public class ArchiveAEExtension extends AEExtension {
     private int storageCommitmentRetryInterval = Integer
             .parseInt(DEF_RETRY_INTERVAL);
 
-    @ConfigurableProperty(name = "dcmFwdMppsDestination")
-    private String[] forwardMPPSDestinations = {};
-
-    @ConfigurableProperty(name = "dcmFwdMppsMaxRetries", defaultValue = "0")
-    private int forwardMPPSMaxRetries;
-
-    @ConfigurableProperty(name = "dcmFwdMppsRetryInterval", defaultValue = DEF_RETRY_INTERVAL)
-    private int forwardMPPSRetryInterval = Integer.parseInt(DEF_RETRY_INTERVAL);
+    @ConfigurableProperty(name = "dcmFwdMppsDestination", collectionOfReferences = true)
+    private List<ApplicationEntity> forwardMPPSDestinations = new ArrayList<>();
 
     @ConfigurableProperty(name = "dcmIanDestination")
     private String[] IANDestinations = {};
@@ -196,6 +191,19 @@ public class ArchiveAEExtension extends AEExtension {
     @ConfigurableProperty(name = "dcmRetrieveSuppressionCriteria")
     private RetrieveSuppressionCriteria retrieveSuppressionCriteria = new RetrieveSuppressionCriteria();
 
+    @LDAP(noContainerNode=true)
+    @ConfigurableProperty(name = "dcmArchivingRules")
+    private ArchivingRules archivingRules = new ArchivingRules();
+
+    @ConfigurableProperty(name = "dcmPatientSelector")
+    private PatientSelectorConfig patientSelectorConfig;
+
+    @ConfigurableProperty(name = "dcmStoreRememberMaxRetries", defaultValue = "0")
+    private int storeAndRememberMaxRetries;
+
+    @ConfigurableProperty(name = "dcmStoreRememberDelayAfterFailedResponse", defaultValue = "3600")
+    private int storeAndRememberDelayAfterFailedResponse = 3600;
+
     public RetrieveSuppressionCriteria getRetrieveSuppressionCriteria() {
         return retrieveSuppressionCriteria;
     }
@@ -204,20 +212,6 @@ public class ArchiveAEExtension extends AEExtension {
             RetrieveSuppressionCriteria retrieveSuppressionCriteria) {
         this.retrieveSuppressionCriteria = retrieveSuppressionCriteria;
     }
-
-    @LDAP(noContainerNode=true)
-    @ConfigurableProperty(name = "dcmMPPSEmulationRules")
-    private List<MPPSEmulationRule> mppsEmulationRules = new ArrayList<MPPSEmulationRule>();
-
-    private Map<String, MPPSEmulationRule> mppsEmulationRuleMap =
-            new HashMap<String, MPPSEmulationRule>();
-
-    @LDAP(noContainerNode=true)
-    @ConfigurableProperty(name = "dcmArchivingRules")
-    private ArchivingRules archivingRules = new ArchivingRules();
-
-    @ConfigurableProperty(name = "dcmPatientSelector")
-    private PatientSelectorConfig patientSelectorConfig;
 
     public PatientSelectorConfig getPatientSelectorConfig() {
         return patientSelectorConfig;
@@ -277,9 +271,7 @@ public class ArchiveAEExtension extends AEExtension {
     }
 
     public void setCompressionRules(CompressionRules rules) {
-        compressionRules.clear();
-        if (rules != null)
-            compressionRules.add(rules);
+        compressionRules = rules;
     }
 
     public boolean removeCompressionRule(CompressionRule ac) {
@@ -305,6 +297,14 @@ public class ArchiveAEExtension extends AEExtension {
 
     public void setStorageSystemGroupID(String storageSystemGroupID) {
         this.storageSystemGroupID = storageSystemGroupID;
+    }
+
+    public void setStorageSystemGroupType(String storageSystemGroupType) {
+        this.storageSystemGroupType = storageSystemGroupType;
+    }
+
+    public String getStorageSystemGroupType() {
+        return storageSystemGroupType;
     }
 
     public String getSpoolDirectoryPath() {
@@ -432,29 +432,12 @@ public class ArchiveAEExtension extends AEExtension {
         this.storageCommitmentRetryInterval = storageCommitmentRetryInterval;
     }
 
-    public final String[] getForwardMPPSDestinations() {
+    public List<ApplicationEntity> getForwardMPPSDestinations() {
         return forwardMPPSDestinations;
     }
 
-    public final void setForwardMPPSDestinations(
-            String[] forwardMPPSDestinations) {
+    public void setForwardMPPSDestinations(List<ApplicationEntity> forwardMPPSDestinations) {
         this.forwardMPPSDestinations = forwardMPPSDestinations;
-    }
-
-    public final int getForwardMPPSMaxRetries() {
-        return forwardMPPSMaxRetries;
-    }
-
-    public final void setForwardMPPSMaxRetries(int forwardMPPSMaxRetries) {
-        this.forwardMPPSMaxRetries = forwardMPPSMaxRetries;
-    }
-
-    public final int getForwardMPPSRetryInterval() {
-        return forwardMPPSRetryInterval;
-    }
-
-    public final void setForwardMPPSRetryInterval(int forwardMPPSRetryInterval) {
-        this.forwardMPPSRetryInterval = forwardMPPSRetryInterval;
     }
 
     public String[] getIANDestinations() {
@@ -555,7 +538,7 @@ public class ArchiveAEExtension extends AEExtension {
     }
 
     public StoreParam getStoreParam() {
-        StoreParam storeParam = ae.getDevice()
+        StoreParam storeParam = applicationEntity.getDevice()
                 .getDeviceExtension(ArchiveDeviceExtension.class)
                 .getStoreParam();
         storeParam.setModifyingSystem(getEffectiveModifyingSystem());
@@ -565,7 +548,7 @@ public class ArchiveAEExtension extends AEExtension {
 
     public QueryParam getQueryParam(EnumSet<QueryOption> queryOpts,
                                     String[] accessControlIDs) {
-        ArchiveDeviceExtension arcDev = ae.getDevice()
+        ArchiveDeviceExtension arcDev = applicationEntity.getDevice()
                 .getDeviceExtension(ArchiveDeviceExtension.class);
         QueryParam queryParam = arcDev.getQueryParam();
         queryParam.setCombinedDatetimeMatching(queryOpts
@@ -598,29 +581,6 @@ public class ArchiveAEExtension extends AEExtension {
         this.queryRetrieveViewID = queryRetrieveViewID;
     }
 
-    public List<MPPSEmulationRule> getMppsEmulationRules() {
-        return mppsEmulationRules;
-    }
-
-    public void setMppsEmulationRules(List<MPPSEmulationRule> rules) {
-        this.mppsEmulationRules.clear();
-        this.mppsEmulationRuleMap.clear();
-        for (MPPSEmulationRule rule : rules) {
-            addMppsEmulationRule(rule);
-        }
-    }
-
-    public MPPSEmulationRule getMppsEmulationRule(String sourceAET) {
-        return mppsEmulationRuleMap.get(sourceAET);
-    }
-
-    public void addMppsEmulationRule(MPPSEmulationRule rule) {
-        mppsEmulationRules.add(rule);
-        for (String sourceAET : rule.getSourceAETs()) {
-            mppsEmulationRuleMap.put(sourceAET, rule);
-        }
-    }
-
     public ReferenceUpdateOnRetrieveScope getQcUpdateReferencesOnRetrieve() {
         return qcUpdateReferencesOnRetrieve;
     }
@@ -647,4 +607,28 @@ public class ArchiveAEExtension extends AEExtension {
         this.defaultExternalRetrieveAETAvailability = defaultExternalRetrieveAETAvailability;
     }
 
+    public int getStoreAndRememberMaxRetries() {
+        return storeAndRememberMaxRetries;
+    }
+
+    public void setStoreAndRememberMaxRetries(int storeAndRememberMaxRetries) {
+        this.storeAndRememberMaxRetries = storeAndRememberMaxRetries;
+    }
+
+    public int getStoreAndRememberDelayAfterFailedResponse() {
+        return storeAndRememberDelayAfterFailedResponse;
+    }
+
+    public void setStoreAndRememberDelayAfterFailedResponse(
+            int storeAndRememberDelayAfterFailedResponse) {
+        this.storeAndRememberDelayAfterFailedResponse = storeAndRememberDelayAfterFailedResponse;
+    }
+
+    public String getOlockHash() {
+        return olockHash;
+    }
+
+    public void setOlockHash(String olockHash) {
+        this.olockHash = olockHash;
+    }
 }

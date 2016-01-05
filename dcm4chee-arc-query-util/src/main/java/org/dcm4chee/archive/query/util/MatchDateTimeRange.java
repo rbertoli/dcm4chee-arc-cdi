@@ -38,7 +38,9 @@
 
 package org.dcm4chee.archive.query.util;
 
+import java.util.Calendar;
 import java.util.Date;
+import java.util.GregorianCalendar;
 
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.DateRange;
@@ -47,6 +49,8 @@ import org.dcm4che3.util.DateUtils;
 import com.mysema.query.BooleanBuilder;
 import com.mysema.query.types.ExpressionUtils;
 import com.mysema.query.types.Predicate;
+import com.mysema.query.types.expr.BooleanExpression;
+import com.mysema.query.types.path.DateTimePath;
 import com.mysema.query.types.path.StringPath;
 
 /**
@@ -54,9 +58,13 @@ import com.mysema.query.types.path.StringPath;
  * @author Michael Backhaus <michael.backhaus@agfa.com>
  * @author Hesham Elbadawi <bsdreko@gmail.com>
  */
-class MatchDateTimeRange {
+public class MatchDateTimeRange {
     
-    static enum FormatDate {
+    static enum ComparisonOperator {
+        GT, GE, EQ, LT, LTE;
+    }
+    
+    public static enum FormatDate {
         DA {
             @Override
             String format(Date date) {
@@ -78,6 +86,18 @@ class MatchDateTimeRange {
         abstract String format(Date date);
     }
 
+    static Predicate rangeMatch(DateTimePath<Date> path,
+            Attributes keys, int tag, FormatDate dt,
+            boolean matchUnknown) {
+        DateRange dateRange = keys.getDateRange(tag, null);
+        if (dateRange == null)
+            return null;
+        
+        return matchUnknown 
+                ? ExpressionUtils.or(range(path, dateRange, dt, keys.getString(tag)), path.isNull())
+                        : ExpressionUtils.and(range(path, dateRange, dt, keys.getString(tag)), path.isNotNull());
+    }
+    
     static Predicate rangeMatch(StringPath path,
             Attributes keys, int tag, FormatDate dt,
             boolean matchUnknown) {
@@ -88,6 +108,37 @@ class MatchDateTimeRange {
         return matchUnknown(path, matchUnknown, range(path, dateRange, dt));
     }
 
+    static Predicate rangeMatch(DateTimePath<Date> dateTimeField, int dateTag, int timeTag,
+            long dateAndTimeTag, Attributes keys, boolean combinedDatetimeMatching, boolean matchUnknown) {
+        final boolean containsDateTag = keys.containsValue(dateTag);
+        final boolean containsTimeTag = keys.containsValue(timeTag);
+        if (!containsDateTag && !containsTimeTag)
+            return null;
+        
+        BooleanBuilder predicates = new BooleanBuilder();
+        if (containsDateTag && containsTimeTag && combinedDatetimeMatching) {
+            predicates.and(matchUnknown 
+                    ? ExpressionUtils.or(combinedRange(dateTimeField, keys.getDateRange(dateAndTimeTag, null)), dateTimeField.isNull())
+                            : ExpressionUtils.and(combinedRange(dateTimeField, keys.getDateRange(dateAndTimeTag, null)), dateTimeField.isNotNull()));
+        } else { 
+            if (containsDateTag)
+                predicates.and(matchUnknown 
+                        ? ExpressionUtils.or(range(dateTimeField, keys.getDateRange(dateTag, null), FormatDate.DA, keys.getString(timeTag)), dateTimeField.isNull())
+                                : ExpressionUtils.and(range(dateTimeField, keys.getDateRange(dateTag, null), FormatDate.DA, keys.getString(timeTag)), dateTimeField.isNotNull()));
+            if (containsTimeTag)
+            predicates.and(matchUnknown 
+                    ? ExpressionUtils.or(range(dateTimeField, adjustDateComponents(keys.getDateRange(dateTag),keys.getDateRange(timeTag, null)), FormatDate.TM, keys.getString(timeTag)), dateTimeField.isNull())
+                            : ExpressionUtils.and(range(dateTimeField, adjustDateComponents(keys.getDateRange(dateTag),keys.getDateRange(timeTag, null)), FormatDate.TM, keys.getString(timeTag)), dateTimeField.isNotNull()));
+            
+        }
+        return predicates;
+    }
+
+    private static DateRange adjustDateComponents(DateRange dtRange, DateRange tmRange) {
+            return tmRange;
+    }
+
+    @Deprecated
     static Predicate rangeMatch(StringPath dateField, StringPath timeField, 
             int dateTag, int timeTag, long dateAndTimeTag, 
             Attributes keys, boolean combinedDatetimeMatching, boolean matchUnknown) {
@@ -129,21 +180,88 @@ class MatchDateTimeRange {
         return rangeInterval(field, startDate, endDate, dt, range);
     }
 
-    private static Predicate rangeInterval(StringPath field, Date startDate,
-            Date endDate, FormatDate dt, DateRange range) {
+    private static Predicate range(DateTimePath<java.util.Date> dateTimeField, DateRange range, FormatDate dt, String timeKey) {
+        Date startDateTime = range.getStartDate();
+        Date endDateTime = range.getEndDate();
+        if (startDateTime == null && dt == FormatDate.DA || dt == FormatDate.DT)
+            return dateTimeField.loe(endDateTime);
+        if (startDateTime == null && dt == FormatDate.TM) {
+            Calendar timeCalendar = new GregorianCalendar();
+            timeCalendar.setTime(endDateTime);
+            return timeLessThan(dateTimeField, timeCalendar).or(timeEqual(dateTimeField, timeCalendar, timeKey));
+        }
+        if (endDateTime == null && dt == FormatDate.DA || dt == FormatDate.DT)
+            return dateTimeField.goe(startDateTime);
+        if (endDateTime == null && dt == FormatDate.TM) {
+            Calendar timeCalendar = new GregorianCalendar();
+            timeCalendar.setTime(startDateTime);
+            return timeGreaterThan(dateTimeField, timeCalendar).or(timeEqual(dateTimeField, timeCalendar, timeKey));
+        }
+        return rangeInterval(dateTimeField, startDateTime, endDateTime, dt, range, timeKey);
+    }
+
+    private static Predicate rangeInterval(DateTimePath<java.util.Date> field, Date startDate,
+            Date endDate, FormatDate dt, DateRange range, String timeKey) {
+        Calendar startCal = new GregorianCalendar();
+        Calendar endCal = new GregorianCalendar();
+        startCal.setTime(startDate);
+        endCal.setTime(endDate);
+        if(dt.equals(FormatDate.TM) && range.isStartDateExeedsEndDate()){
+            Calendar midnightLow = new GregorianCalendar();
+            midnightLow.setTime(startDate);
+            midnightLow.set(Calendar.HOUR_OF_DAY, 23);
+            midnightLow.set(Calendar.MINUTE, 59);
+            midnightLow.set(Calendar.SECOND,59);
+            midnightLow.set(Calendar.MILLISECOND,999);
+            Calendar midnightHigh = new GregorianCalendar();
+            midnightHigh.setTime(endDate);
+            midnightHigh.set(Calendar.HOUR_OF_DAY, 0);
+            midnightHigh.set(Calendar.MINUTE, 0);
+            midnightHigh.set(Calendar.SECOND,0);
+            midnightHigh.set(Calendar.MILLISECOND,0);
+                return ExpressionUtils.or((timeGreaterThan(field, startCal).or(timeEqual(field, startCal, timeKey))).and(timeLessThan(field, midnightLow).or(timeEqual(field, midnightLow, timeKey))),
+                        (timeGreaterThan(field, midnightHigh).or(timeEqual(field, midnightHigh, timeKey))).and(timeLessThan(field, endCal)).or(timeEqual(field, endCal, timeKey)));
+        }
+        else
+        {
+
+             return dt == FormatDate.DA || dt == FormatDate.DT ? dateEqual(startCal, endCal)
+                     ? dateEqual(field, startCal)
+                     : field.between(startDate, endDate)
+                     : timeEquals(startCal, endCal)
+                     ? timeEqual(field, startCal, timeKey)
+                     : (timeGreaterThan(field, startCal).or(timeEqual(field, startCal, timeKey))).and(timeLessThan(field, endCal).or(timeEqual(field, endCal, timeKey)));
+        }
+    }
+
+    private static boolean timeEquals(Calendar time1, Calendar time2) {
+        return time1.get(Calendar.HOUR_OF_DAY) == time2.get(Calendar.HOUR_OF_DAY)
+                && time1.get(Calendar.MINUTE) == time2.get(Calendar.MINUTE)
+                && time1.get(Calendar.SECOND) == time2.get(Calendar.SECOND);
+    }
+
+    private static Predicate rangeInterval(StringPath field, Date startDate, Date endDate, FormatDate dt,
+            DateRange range) {
         String start = dt.format(startDate);
         String end = dt.format(endDate);
-    	if(dt.equals(FormatDate.TM) && range.isStartDateExeedsEndDate()){
-    		String midnightLow = "115959.999";
-    		String midnightHigh = "000000.000";
-    		return ExpressionUtils.or(field.between(start, midnightLow),field.between(midnightHigh, end));
-    	}
-    	else
-    	{
-    	     return end.equals(start)
-    	             ? field.eq(start)
-    	             : field.between(start, end);
-    	}
+        if (dt.equals(FormatDate.TM) && range.isStartDateExeedsEndDate()) {
+            String midnightLow = "115959.999";
+            String midnightHigh = "000000.000";
+            return ExpressionUtils.or(field.between(start, midnightLow), field.between(midnightHigh, end));
+        } else {
+            return end.equals(start) ? field.eq(start) : field.between(start, end);
+        }
+    }
+
+    private static Predicate combinedRange(DateTimePath<java.util.Date> dateTimeField, DateRange dateRange) {
+        if (dateRange.getStartDate() == null)
+            return combinedRangeEnd(dateTimeField, 
+                    dateRange.getEndDate());
+        if (dateRange.getEndDate() == null)
+            return combinedRangeStart(dateTimeField, 
+                    dateRange.getStartDate());
+        return combinedRangeInterval(dateTimeField, 
+                    dateRange.getStartDate(), dateRange.getEndDate());
     }
 
     private static Predicate combinedRange(StringPath dateField, StringPath timeField, DateRange dateRange) {
@@ -159,6 +277,11 @@ class MatchDateTimeRange {
                     dateRange.getStartDate(), dateRange.getEndDate());
     }
 
+    private static Predicate combinedRangeInterval(DateTimePath<java.util.Date> dateTimeField,
+            Date startDateTimeRange, Date endDateTimeRange) {
+        return dateTimeField.between(startDateTimeRange, endDateTimeRange);
+    }
+
     private static Predicate combinedRangeInterval(StringPath dateField,
             StringPath timeField, Date startDateRange, Date endDateRange) {
         String startTime = DateUtils.formatTM(null, startDateRange);
@@ -171,6 +294,11 @@ class MatchDateTimeRange {
             : ExpressionUtils.and(
                     combinedRangeStart(dateField, timeField, startDate, startTime), 
                     combinedRangeEnd(dateField, timeField, endDate, endTime));
+    }
+
+    private static Predicate combinedRangeEnd(DateTimePath<java.util.Date> dateTimeField
+            , Date endDateAndTime) {
+        return dateTimeField.loe(endDateAndTime);
     }
 
     private static Predicate combinedRangeEnd(StringPath dateField,
@@ -192,4 +320,69 @@ class MatchDateTimeRange {
         Predicate startDayFollowing = dateField.gt(startDate);
         return ExpressionUtils.anyOf(startDayTime, startDayTimeUnknown, startDayFollowing);
     }
+
+    private static Predicate combinedRangeStart(DateTimePath<java.util.Date> dateTimeField
+            , Date startDateTime) {
+        return dateTimeField.goe(startDateTime);
+    }
+
+    private static BooleanExpression timeGreaterThan(DateTimePath<java.util.Date> dateTimeField,
+            Calendar startDateTimeCal) {
+        return dateTimeField.hour().gt(startDateTimeCal.get(Calendar.HOUR_OF_DAY))
+                .or(dateTimeField.hour().eq(startDateTimeCal.get(Calendar.HOUR_OF_DAY))
+                        .and(dateTimeField.minute().gt(startDateTimeCal.get(Calendar.MINUTE))))
+                .or(dateTimeField.hour().eq(startDateTimeCal.get(Calendar.HOUR_OF_DAY))
+                        .and(dateTimeField.minute().eq(startDateTimeCal.get(Calendar.MINUTE))
+                                .and(dateTimeField.second().gt(startDateTimeCal.get(Calendar.SECOND)))));
+    }
+
+    private static BooleanExpression timeLessThan(DateTimePath<java.util.Date> dateTimeField,
+            Calendar endDateTimeCal) {
+        return dateTimeField.hour().lt(endDateTimeCal.get(Calendar.HOUR_OF_DAY))
+                .or(dateTimeField.hour().eq(endDateTimeCal.get(Calendar.HOUR_OF_DAY))
+                        .and(dateTimeField.minute().lt(endDateTimeCal.get(Calendar.MINUTE))))
+                .or(dateTimeField.hour().eq(endDateTimeCal.get(Calendar.HOUR_OF_DAY))
+                        .and(dateTimeField.minute().eq(endDateTimeCal.get(Calendar.MINUTE))
+                                .and(dateTimeField.second().lt(endDateTimeCal.get(Calendar.SECOND)))));
+    }
+
+    private static BooleanExpression dateEqual(DateTimePath<java.util.Date> dateTimeField, Calendar dateCal) {
+        return dateTimeField.year().eq(dateCal.get(Calendar.YEAR))
+                .and(dateTimeField.month().eq(dateCal.get(Calendar.MONTH) + 1) //compensate for POSIX representation of month 
+                        .and(dateTimeField.dayOfMonth().eq(dateCal.get(Calendar.DAY_OF_MONTH))));
+    }
+
+    private static BooleanExpression timeEqual(DateTimePath<java.util.Date> dateTimeField, Calendar timeCal, String timeKey) {
+            return addBasicTimeComponentsEqualsExpression(dateTimeField, timeKey, timeCal);
+    }
+    private static BooleanExpression addBasicTimeComponentsEqualsExpression(DateTimePath<java.util.Date> dateTimeField, String time, Calendar timeCal) {
+        BooleanExpression exp ;
+        switch (time.length()) {
+        case 2:
+            exp = dateTimeField.hour().eq(timeCal.get(Calendar.HOUR_OF_DAY));
+            break;
+        case 4:
+            exp = dateTimeField.hour().eq(timeCal.get(Calendar.HOUR_OF_DAY))
+                    .and(dateTimeField.minute().eq(timeCal.get(Calendar.MINUTE)));
+            break;
+        case 6:
+            exp = dateTimeField.hour().eq(timeCal.get(Calendar.HOUR_OF_DAY))
+                    .and(dateTimeField.minute().eq(timeCal.get(Calendar.MINUTE)))
+                        .and(dateTimeField.second().eq(timeCal.get(Calendar.SECOND)));
+            break;
+        default:
+            exp = dateTimeField.hour().eq(timeCal.get(Calendar.HOUR_OF_DAY))
+                    .and(dateTimeField.minute().eq(timeCal.get(Calendar.MINUTE)))
+                    .and(dateTimeField.second().eq(timeCal.get(Calendar.SECOND)));
+            break;
+        }
+        return exp;
+    }
+
+    private static boolean dateEqual(Calendar date1, Calendar date2) {
+        return date1.get(Calendar.YEAR) == date2.get(Calendar.YEAR)
+                && date1.get(Calendar.MONTH) == date2.get(Calendar.MONTH)
+                && date1.get(Calendar.DAY_OF_MONTH) == date2.get(Calendar.DAY_OF_MONTH);
+    }
+
 }

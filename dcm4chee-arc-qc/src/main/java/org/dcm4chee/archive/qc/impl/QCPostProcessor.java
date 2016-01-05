@@ -37,22 +37,35 @@
  * ***** END LICENSE BLOCK ***** */
 package org.dcm4chee.archive.qc.impl;
 
-import javax.enterprise.event.Observes;
+import javax.enterprise.context.ApplicationScoped;
+import javax.inject.Inject;
 
+import org.dcm4chee.archive.qc.QCRetrieveBean;
+import org.dcm4chee.archive.sc.StructuralChangeContainer;
+import org.dcm4chee.archive.sc.StructuralChangeTransactionHook;
 import org.slf4j.Logger;
-import org.dcm4chee.archive.dto.Service;
-import org.dcm4chee.archive.dto.ServiceType;
-import org.dcm4chee.archive.qc.QCEvent;
 import org.slf4j.LoggerFactory;
 
 /**
+ * Does post-processing after QC.
+ *
  * @author Hesham Elbadawi <bsdreko@gmail.com>
  */
+@ApplicationScoped
+public class QCPostProcessor implements StructuralChangeTransactionHook {
+    private static final Logger LOG = LoggerFactory.getLogger(QCPostProcessor.class);
+    
+    @Inject
+    private QCRetrieveBean retrieveBean;
 
-public class QCPostProcessor {
+    @Override
+    public boolean beforeCommitStructuralChanges(StructuralChangeContainer changeContext) {
+        return true;
+    }
 
-    static final Logger LOG = LoggerFactory.getLogger(QCPostProcessor.class);
-    public void observeQC(@Observes @Service(ServiceType.QCPOSTPROCESSING) QCEvent event) {
-        LOG.info("QC operation successfull, starting post processing");
+    @Override
+    public void afterCommitStructuralChanges(StructuralChangeContainer changeContext) {
+        LOG.info("Calculation of query attributes after QC");
+        retrieveBean.recalculateQueryAttributes(changeContext);
     }
 }

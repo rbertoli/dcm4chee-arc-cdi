@@ -58,11 +58,13 @@ import org.dcm4chee.archive.entity.QInstance;
 import org.dcm4chee.archive.entity.QSeries;
 import org.dcm4chee.archive.entity.QStudy;
 import org.dcm4chee.archive.entity.Utils;
+import org.dcm4chee.archive.locationmgmt.LocationMgmt;
 import org.dcm4chee.archive.query.util.QueryBuilder;
 import org.dcm4chee.archive.retrieve.RetrieveContext;
 import org.dcm4chee.archive.retrieve.RetrieveService;
 import org.dcm4chee.storage.conf.StorageDeviceExtension;
 import org.dcm4chee.storage.conf.StorageSystem;
+import org.dcm4chee.storage.conf.StorageSystemGroup;
 import org.jboss.logging.Logger;
 
 import com.mysema.query.Tuple;
@@ -103,6 +105,9 @@ public class DefaultRetrieveService implements RetrieveService {
     @Inject
     private RetrieveServiceEJB ejb;
 
+    @Inject
+    private LocationMgmt locationManager;
+
     public RetrieveContext createRetrieveContext(RetrieveService service,
             String sourceAET, ArchiveAEExtension arcAE) {
         return new RetrieveContextImpl(service, sourceAET, arcAE);
@@ -133,6 +138,9 @@ public class DefaultRetrieveService implements RetrieveService {
     /**
      * Given study and/or series and/or object uids, performs the query and
      * returns references to the instances.
+     * The list contains one ArchiveInstanceLocator for each instance. 
+     * Additional locations of an instance are available in a chain of FallBackLocator.
+     * Note: The external locations are only available if the instance has no Location. 
      */
     @Override
     public List<ArchiveInstanceLocator> calculateMatches(String studyIUID,
@@ -150,6 +158,7 @@ public class DefaultRetrieveService implements RetrieveService {
 
     private List<ArchiveInstanceLocator> locate(List<Tuple> tuples, boolean withoutBulkData) {
 
+        List<String> studiesUpdatedForAccess = new ArrayList<String>();
         List<ArchiveInstanceLocator> locators = new ArrayList<ArchiveInstanceLocator>(tuples.size());
         StorageDeviceExtension storageConf = device.getDeviceExtension(StorageDeviceExtension.class);
         long instPk = -1;
@@ -158,22 +167,31 @@ public class DefaultRetrieveService implements RetrieveService {
         ArchiveInstanceLocator locator = null;
 
         for (Tuple tuple : tuples) {
-            Boolean b = tuple.get(QLocation.location.withoutBulkData);
+            Boolean locatorWithoutBulkData = tuple.get(QLocation.location.withoutBulkData);
             String retrieveAETs = tuple.get(QInstance.instance.retrieveAETs);
-            if (b == null) { // No Location
+            if (locatorWithoutBulkData == null) { // No Location
                 if (retrieveAETs == null) // No external location
                     continue;
-            } else if (b && !withoutBulkData) // metadata
-            {
-                continue;
+            } else if (locator != null && !locator.isWithoutBulkdata() && locatorWithoutBulkData && !withoutBulkData) {
+            	LOG.debug("Skip Locator withoutBulkData! We have already a locator with bulkData and request is also for 'with bulkdata'");
+            	continue;
             }
-
             long nextSeriesPk = tuple.get(QSeries.series.pk);
             long nextInstPk = tuple.get(QInstance.instance.pk);
 
             if (seriesPk != nextSeriesPk) {
                 seriesAttrs = ejb.getSeriesAttributes(nextSeriesPk);
                 seriesPk = nextSeriesPk;
+                
+                String groupID = tuple.get(QLocation.location.storageSystemGroupID);
+                String currentStudy = tuple.get(QStudy.study.studyInstanceUID);
+                
+                if(!studiesUpdatedForAccess.contains(currentStudy) 
+                        && groupID !=null) {
+                    locationManager.findOrCreateStudyOnStorageGroup(currentStudy, 
+                            groupID);
+                }
+                
             }
             if (instPk != nextInstPk) {
                 if (locator != null)
@@ -181,11 +199,14 @@ public class DefaultRetrieveService implements RetrieveService {
                 locator = null;
             }
             instPk = nextInstPk;
-            if(tuple.get(QLocation.location.storageSystemGroupID) == null)
+            if(tuple.get(QLocation.location.storageSystemGroupID) == null) { //can only be null if instance has no location!
                 locator = augmentExternalLocations(updateLocator(storageConf, 
                         locator, seriesAttrs, tuple));
-            else
+            } else {
+                if (locator != null && !withoutBulkData && !locatorWithoutBulkData && locator.isWithoutBulkdata())
+                    locator = null; //replace current locator (withoutBulkData) with locator with bulkdata 
                 locator = updateLocator(storageConf, locator, seriesAttrs, tuple);
+            }
         }
         if (locator != null)
             locators.add(locator);

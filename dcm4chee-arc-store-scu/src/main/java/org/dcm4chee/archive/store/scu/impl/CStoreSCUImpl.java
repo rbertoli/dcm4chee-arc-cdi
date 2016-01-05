@@ -40,14 +40,16 @@ package org.dcm4chee.archive.store.scu.impl;
 
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collection;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
 import org.dcm4che3.data.Attributes;
+import org.dcm4che3.data.DatasetWithFMI;
 import org.dcm4che3.data.Tag;
 import org.dcm4che3.data.UID;
+import org.dcm4che3.data.VR;
 import org.dcm4che3.imageio.codec.Decompressor;
 import org.dcm4che3.io.DicomInputStream;
 import org.dcm4che3.io.DicomInputStream.IncludeBulkData;
@@ -69,13 +71,16 @@ import org.dcm4chee.archive.entity.Utils;
 import org.dcm4chee.archive.fetch.forward.FetchForwardCallBack;
 import org.dcm4chee.archive.store.scu.CStoreSCUContext;
 import org.dcm4chee.archive.store.scu.CStoreSCUService;
+import org.dcm4chee.task.ImageProcessingTaskTypes;
+import org.dcm4chee.task.MemoryConsumingTask;
+import org.dcm4chee.task.TaskType;
+import org.dcm4chee.task.WeightWatcher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
  * @author Umberto Cappellini <umberto.cappellini@agfa.com>
  * @author Hesham Elbadawio <bsdreko@gmail.com>
- *
  */
 public class CStoreSCUImpl extends BasicCStoreSCU<ArchiveInstanceLocator>
         implements CStoreSCU<ArchiveInstanceLocator> {
@@ -85,18 +90,17 @@ public class CStoreSCUImpl extends BasicCStoreSCU<ArchiveInstanceLocator>
 
     private CStoreSCUContext context;
     private CStoreSCUService service;
+
+    private final WeightWatcher weightWatcher;
+
     private boolean withoutBulkData;
 
-    /**
-     * @param localAE
-     * @param remoteAE
-     * @param storeSCUService
-     */
     public CStoreSCUImpl(ApplicationEntity localAE, ApplicationEntity remoteAE, ServiceType service,
-            CStoreSCUService storeSCUService) {
+                         CStoreSCUService storeSCUService, WeightWatcher weightWatcher) {
         super();
         this.context = new CStoreSCUContext(localAE, remoteAE, service);
         this.service = storeSCUService;
+        this.weightWatcher = weightWatcher;
     }
 
     public void setWithoutBulkData(boolean withoutBulkData) {
@@ -108,93 +112,154 @@ public class CStoreSCUImpl extends BasicCStoreSCU<ArchiveInstanceLocator>
             final java.util.List<ArchiveInstanceLocator> instances,
             final Association storeas, final int priority) {
 
-        ArrayList<ArchiveInstanceLocator> localyAvailable = (ArrayList<ArchiveInstanceLocator>) filterLocalOrExternalMatches(
+        ArrayList<ArchiveInstanceLocator> locallyAvailable = (ArrayList<ArchiveInstanceLocator>) filterLocalOrExternalMatches(
                 instances, true);
         ArrayList<ArchiveInstanceLocator> externallyAvailable = (ArrayList<ArchiveInstanceLocator>) filterLocalOrExternalMatches(
                 instances, false);
-        BasicCStoreSCUResp responseForLocalyAvailable = null;
+        BasicCStoreSCUResp responseForLocallyAvailable = null;
 
-        if(!localyAvailable.isEmpty())
-        responseForLocalyAvailable = super.cstore(
-                localyAvailable, storeas, priority);
+        if (!locallyAvailable.isEmpty())
+            responseForLocallyAvailable = pushInstances(locallyAvailable, storeas, priority);
         //initialize remaining response
-        BasicCStoreSCUResp finalResponse = extendResponse(responseForLocalyAvailable);
-        
+        BasicCStoreSCUResp finalResponse = extendResponse(responseForLocallyAvailable);
+
         if (!externallyAvailable.isEmpty()) {
-        FetchForwardCallBack moveCallBack = new FetchForwardCallBack() {
-            
-            @Override
-            public void onFetch(Collection<ArchiveInstanceLocator> instances,
-                    BasicCStoreSCUResp resp) {
-               pushInstances((ArrayList<ArchiveInstanceLocator>) instances, storeas, priority);
+            FetchForwardCallBack moveCallBack = new FetchForwardCallBack() {
+
+                @Override
+                public void onFetch(Collection<ArchiveInstanceLocator> instances,
+                                    BasicCStoreSCUResp resp) {
+                    pushInstances((ArrayList<ArchiveInstanceLocator>) instances, storeas, priority);
+                }
+            };
+            FetchForwardCallBack wadoCallBack = new FetchForwardCallBack() {
+
+                @Override
+                public void onFetch(Collection<ArchiveInstanceLocator> instances,
+                                    BasicCStoreSCUResp resp) {
+                    pushInstances((ArrayList<ArchiveInstanceLocator>) instances, storeas, priority);
+                }
+            };
+            finalResponse = service.getFetchForwardService().fetchForward(instances.size(), finalResponse, externallyAvailable, storeas, priority, wadoCallBack, moveCallBack);
+            if (failed.size() > 0) {
+                if (failed.size() == nr_instances)
+                    status = Status.UnableToPerformSubOperations;
+                else
+                    status = Status.OneOrMoreFailures;
+            } else {
+                status = Status.Success;
             }
-        };
-        FetchForwardCallBack wadoCallBack = new FetchForwardCallBack() {
-            
-            @Override
-            public void onFetch(Collection<ArchiveInstanceLocator> instances,
-                    BasicCStoreSCUResp resp) {
-               pushInstances((ArrayList<ArchiveInstanceLocator>) instances, storeas, priority);
-            }
-        };
-        finalResponse =  service.getFetchForwardService().fetchForward(instances.size(), finalResponse, externallyAvailable, storeas, priority, wadoCallBack, moveCallBack);
-        if (failed.size() > 0) {
-            if (failed.size() == nr_instances)
-                status = Status.UnableToPerformSubOperations;
-            else
-                status = Status.OneOrMoreFailures;
-        } else {
-            status = Status.Success;
-        }
-        setChanged();
-        notifyObservers();
+            setChanged();
+            notifyObservers();
         }
         return finalResponse;
     }
 
     @Override
-    protected DataWriter createDataWriter(ArchiveInstanceLocator inst,
-            String tsuid) throws IOException, UnsupportedStoreSCUException {
-        if (inst == null || !(inst instanceof ArchiveInstanceLocator))
-            throw new UnsupportedStoreSCUException("Unable to send instance");
+    protected void storeInstance(Association storeas, ArchiveInstanceLocator instanceLocator) throws IOException, InterruptedException {
+        String tsuid;
+        DatasetWithFMI datasetWithFMI = null;
+        Attributes attrs;
+        ArchiveInstanceLocator inst = instanceLocator;
+        try {
+            ArchiveAEExtension arcAEExt = context.getLocalAE().getAEExtension(
+                    ArchiveAEExtension.class);
 
-        ArchiveAEExtension arcAEExt = context.getLocalAE().getAEExtension(
-                ArchiveAEExtension.class);
-
-        Attributes attrs = null;
-        do {
-            try {
-                attrs = readFrom(inst);
-            } catch (IOException e) {
-                LOG.info("Failed to read Data Set with iuid={} from {}@{}",
-                        inst.iuid, inst.getFilePath(), inst.getStorageSystem(), e);
-                inst = inst.getFallbackLocator();
-                if (inst == null) {
-                    throw e;
+            do {
+                try {
+                    datasetWithFMI = readFrom(inst);
+                } catch (IOException e) {
+                    LOG.info("Failed to read Data Set with iuid={} from {}@{}",
+                            inst.iuid, inst.getFilePath(), inst.getStorageSystem(), e);
+                    inst = inst.getFallbackLocator();
+                    if (inst == null) {
+                        throw e;
+                    }
+                    LOG.info("Try to read Data Set from alternative location");
                 }
-                LOG.info("Try to read Data Set from alternative location");
+            } while (datasetWithFMI == null);
+
+            attrs = datasetWithFMI.getDataset();
+
+            if (context.getArchiveAEExtension().getRetrieveSuppressionCriteria().isCheckTransferCapabilities()) {
+                // check if eliminated by sop class
+                if (service.isSOPClassSuppressed(inst, context)) {
+                    LOG.info("Not sending instance {} because its SOPClass is suppressed", inst.iuid);
+                    return;
+                }
             }
-        } while (attrs == null);
 
-        // check for suppression criteria
-        String templateURI = arcAEExt.getRetrieveSuppressionCriteria()
-                .getSuppressionCriteriaMap().get(context.getRemoteAE().getAETitle());
-        if (templateURI != null)
-            inst = service.applySuppressionCriteria(inst, attrs, templateURI,
-                    context);
+            // check for suppression criteria
+            ApplicationEntity remoteAE = context.getRemoteAE();
+            if (remoteAE != null) {
+                String templateURI = arcAEExt.getRetrieveSuppressionCriteria().getSuppressionCriteriaMap().get(remoteAE.getAETitle());
+                if (templateURI != null) {
+                    if(service.isInstanceSuppressed(inst, attrs, templateURI, context)) {
+                        LOG.info("Not sending instance {} because it is suppressed", inst.iuid);
+                        return;
+                    }
+                }
+            }
 
-        service.coerceFileBeforeMerge(inst, attrs, context);
+            tsuid = selectTransferSyntaxFor(storeas, inst, datasetWithFMI);
 
-        attrs = Utils.mergeAndNormalize(attrs, (Attributes) inst.getObject());
+            service.coerceFileBeforeMerge(inst, attrs, context);
 
+            //here we merge file attributes with attributes in the blob
+            attrs = Utils.mergeAndNormalize(attrs, (Attributes) inst.getObject());
 
-        service.coerceAttributes(attrs, context);
-        if (!tsuid.equals(inst.tsuid))
-            Decompressor.decompress(attrs, inst.tsuid);
-        return new DataWriterAdapter(attrs);
+            service.coerceAttributes(attrs, context);
+            if (!inst.iuid.equals(attrs.getString(Tag.SOPInstanceUID))) {
+            	String newIUID = attrs.getString(Tag.SOPInstanceUID);
+            	LOG.info("SOP Instance UID changed! {} -> {}", inst.iuid, newIUID);
+            	inst = changeSOPInstanceUID(inst, newIUID);
+            }
+
+        } catch (Exception e) {
+            LOG.info("Unable to store {}/{} to {}",
+                    UID.nameOf(instanceLocator.cuid), UID.nameOf(instanceLocator.tsuid),
+                    storeas.getRemoteAET(), e);
+            failed.add(instanceLocator);
+            return;
+        }
+
+        try {
+            weightWatcher.execute(new StoreSCUTask(this, storeas, inst, attrs, tsuid));
+        } catch (Exception e) {
+            if (e instanceof IOException)
+                throw (IOException) e;
+            else if (e instanceof InterruptedException)
+                throw (InterruptedException) e;
+            else if (e instanceof RuntimeException)
+                throw (RuntimeException) e;
+            else
+                throw new RuntimeException(e);
+        }
     }
 
-    private Attributes readFrom(ArchiveInstanceLocator inst) throws IOException {
+	private ArchiveInstanceLocator changeSOPInstanceUID(ArchiveInstanceLocator inst, String newIUID) {
+		ArchiveInstanceLocator newLocator = new ArchiveInstanceLocator.Builder(
+		        inst.cuid, 
+		        newIUID,
+		        inst.tsuid)
+		.storageSystem(inst.getStorageSystem())
+		.storagePath(inst.getFilePath())
+		.entryName(inst.getEntryName())
+		.fileTimeZoneID(inst.getFileTimeZoneID())
+		.retrieveAETs(inst.getRetrieveAETs())
+		.withoutBulkdata(inst.isWithoutBulkdata())
+		.seriesInstanceUID(inst.getSeriesInstanceUID())
+		.studyInstanceUID(inst.getStudyInstanceUID())
+		.externalLocators(inst.getExternalLocators())
+		.build();
+		if (inst.getFallbackLocator() != null) {
+			newLocator.setFallbackLocator(changeSOPInstanceUID(inst.getFallbackLocator(), newIUID));
+		}
+		return newLocator;
+	}
+
+
+    private DatasetWithFMI readFrom(ArchiveInstanceLocator inst) throws IOException {
 
         try (DicomInputStream din = new DicomInputStream(service.getFile(inst)
                 .toFile())) {
@@ -209,23 +274,24 @@ public class CStoreSCUImpl extends BasicCStoreSCU<ArchiveInstanceLocator>
                 }
             }
             din.setIncludeBulkData(includeBulkData);
-            return din.readDataset(-1, stopTag);
+            return din.readDatasetWithFMI(-1, stopTag);
         }
     }
 
     private BasicCStoreSCUResp extendResponse(
-            BasicCStoreSCUResp responseForLocalyAvailable) {
+            BasicCStoreSCUResp responseForLocallyAvailable) {
         BasicCStoreSCUResp externalResponse = new BasicCStoreSCUResp();
-        externalResponse.setCompleted(responseForLocalyAvailable != null? 
-                responseForLocalyAvailable.getCompleted() : 0);
-        externalResponse.setFailed(responseForLocalyAvailable != null?
-                responseForLocalyAvailable.getFailed() : 0);
-        externalResponse.setFailedUIDs(responseForLocalyAvailable != null? responseForLocalyAvailable.getFailedUIDs() == null
-                ? new String[]{} : responseForLocalyAvailable.getFailedUIDs() : new String[] {});
-        externalResponse.setWarning(responseForLocalyAvailable != null?
-                responseForLocalyAvailable.getWarning() : 0);
+        externalResponse.setCompleted(responseForLocallyAvailable != null ?
+                responseForLocallyAvailable.getCompleted() : 0);
+        externalResponse.setFailed(responseForLocallyAvailable != null ?
+                responseForLocallyAvailable.getFailed() : 0);
+        externalResponse.setFailedUIDs(responseForLocallyAvailable != null ? responseForLocallyAvailable.getFailedUIDs() == null
+                ? new String[]{} : responseForLocallyAvailable.getFailedUIDs() : new String[]{});
+        externalResponse.setWarning(responseForLocallyAvailable != null ?
+                responseForLocallyAvailable.getWarning() : 0);
         return externalResponse;
     }
+
     private List<ArchiveInstanceLocator> filterLocalOrExternalMatches(
             List<ArchiveInstanceLocator> matches, boolean localMatches) {
         ArrayList<ArchiveInstanceLocator> filteredMatches = new ArrayList<ArchiveInstanceLocator>();
@@ -242,50 +308,51 @@ public class CStoreSCUImpl extends BasicCStoreSCU<ArchiveInstanceLocator>
         }
         return filteredMatches;
     }
+
     private boolean isConfiguredAndAccepted(InstanceLocator ref,
-            Set<String> negotiated) {
-        ArrayList<TransferCapability> aeTCs = new ArrayList<TransferCapability>(
-                context.getRemoteAE().getTransferCapabilitiesWithRole(Role.SCU));
-        for (TransferCapability supportedTC : aeTCs) {
-            if (ref.cuid.compareTo(supportedTC.getSopClass()) == 0
-                    && supportedTC.containsTransferSyntax(ref.tsuid)
-                    && negotiated.contains(ref.tsuid)) {
-                return true;
+                                            Set<String> negotiated) {
+        if (context.getRemoteAE() != null) {
+            ArrayList<TransferCapability> aeTCs = new ArrayList<TransferCapability>(
+                    context.getRemoteAE().getTransferCapabilitiesWithRole(Role.SCU));
+            for (TransferCapability supportedTC : aeTCs) {
+                if (ref.cuid.compareTo(supportedTC.getSopClass()) == 0
+                        && supportedTC.containsTransferSyntax(ref.tsuid)
+                        && negotiated.contains(ref.tsuid)) {
+                    return true;
+                }
             }
         }
         return false;
     }
 
     private String getDefaultConfiguredTransferSyntax(InstanceLocator ref) {
-        ArrayList<TransferCapability> aeTCs = new ArrayList<TransferCapability>(
-                context.getRemoteAE().getTransferCapabilitiesWithRole(Role.SCU));
-        for (TransferCapability supportedTC : aeTCs) {
-            if (ref.cuid.compareTo(supportedTC.getSopClass()) == 0) {
-                return supportedTC
-                        .containsTransferSyntax(UID.ExplicitVRLittleEndian) ? UID.ExplicitVRLittleEndian
-                        : UID.ImplicitVRLittleEndian;
+        if (context.getRemoteAE() != null) {
+            Collection<TransferCapability> aeTCs = context.getRemoteAE().getTransferCapabilitiesWithRole(Role.SCU);
+            for (TransferCapability supportedTC : aeTCs) {
+                if (ref.cuid.equals(supportedTC.getSopClass())) {
+                    if (supportedTC.containsTransferSyntax(UID.ExplicitVRLittleEndian))
+                        return UID.ExplicitVRLittleEndian;
+                    else
+                        return UID.ImplicitVRLittleEndian;
+                }
             }
         }
         return UID.ImplicitVRLittleEndian;
     }
 
-    @Override
-    protected String selectTransferSyntaxFor(Association storeas,
-            ArchiveInstanceLocator inst) throws UnsupportedStoreSCUException {
-        Set<String> acceptedTransferSyntax = storeas
-                .getTransferSyntaxesFor(inst.cuid);
-        // check for SOP classes elimination
+    protected String selectTransferSyntaxFor(Association storeas, ArchiveInstanceLocator inst, DatasetWithFMI dataSetWithFMI) throws UnsupportedStoreSCUException {
+        Set<String> acceptedTransferSyntax = new HashSet<>(storeas.getTransferSyntaxesFor(inst.cuid));
+
+        // prevent that (possibly) faulty JPEG-LS data leaves the system,
+        // we only want to store it decompressed
+        if (inst.getStorageSystem().getStorageSystemGroup().isPossiblyFaultyJPEGLS(dataSetWithFMI)) {
+            acceptedTransferSyntax.remove(UID.JPEGLSLossless);
+        }
+
+        // transfer capabilities from the config should be used
         if (context.getArchiveAEExtension().getRetrieveSuppressionCriteria()
                 .isCheckTransferCapabilities()) {
-            inst = service.eliminateUnSupportedSOPClasses(inst, context);
-
-            // check if eliminated then throw exception
-            if (inst == null)
-                throw new UnsupportedStoreSCUException(
-                        "Unable to send instance, SOP class not configured");
-
-            if (isConfiguredAndAccepted(inst,
-                    storeas.getTransferSyntaxesFor(inst.cuid)))
+            if (isConfiguredAndAccepted(inst, acceptedTransferSyntax))
                 return inst.tsuid;
             else
                 return getDefaultConfiguredTransferSyntax(inst);
@@ -294,41 +361,74 @@ public class CStoreSCUImpl extends BasicCStoreSCU<ArchiveInstanceLocator>
         if (acceptedTransferSyntax.contains(inst.tsuid))
             return inst.tsuid;
 
-        return storeas.getTransferSyntaxesFor(inst.cuid).contains(
-                UID.ExplicitVRLittleEndian) ? UID.ExplicitVRLittleEndian
-                : UID.ImplicitVRLittleEndian;
-    }
-
-    private void pushInstances(ArrayList<ArchiveInstanceLocator> instances, Association storeas, int priority) {
-        super.cstore(instances, storeas, priority);
-    }
-
-    private void push(int instanceCount,
-            java.util.List<ArchiveInstanceLocator> instances,
-            Association storeas, int priority, final BasicCStoreSCUResp resp) {
-        BasicCStoreSCUResp storeResp = super.cstore(instances, storeas, priority);
-        resp.setCompleted(resp.getCompleted()+1);
-        resp.setFailed(resp.getFailed() + storeResp.getFailed());
-        
-        if(resp.getFailedUIDs() !=null && storeResp.getFailedUIDs() != null)
-            resp.setFailedUIDs(updateFailed(resp.getFailedUIDs(),
-                    storeResp.getFailedUIDs()));
+        if (acceptedTransferSyntax.contains(UID.ExplicitVRLittleEndian))
+            return UID.ExplicitVRLittleEndian;
         else
-        resp.setFailedUIDs(storeResp.getFailedUIDs() == null ? 
-                new String[] {} : storeResp.getFailedUIDs());
-        
-        resp.setWarning(resp.getWarning() + storeResp.getWarning());
-        resp.setStatus(storeResp.getStatus());
-        super.nr_instances = instanceCount;
-        super.status = Status.Pending;
-        super.setChanged();
-        super.notifyObservers();
+            return UID.ImplicitVRLittleEndian;
     }
 
-    private String[] updateFailed(String[] failedUIDs, String[] failedUIDs2) {
-        String[] result = Arrays.copyOf(failedUIDs, failedUIDs.length + failedUIDs2.length);
-        System.arraycopy(failedUIDs2, 0, result, failedUIDs.length, failedUIDs2.length);
-        return result;
+    private BasicCStoreSCUResp pushInstances(ArrayList<ArchiveInstanceLocator> instances, Association storeas, int priority) {
+        return super.cstore(instances, storeas, priority);
     }
 
+    private static class StoreSCUTask implements MemoryConsumingTask<Void> {
+        private final CStoreSCUImpl storeSCU;
+        private final Association storeas;
+        private final ArchiveInstanceLocator inst;
+        private final Attributes attrs;
+        private final String targetTransferSyntaxUID;
+        private Decompressor decompressor;
+
+        public StoreSCUTask(CStoreSCUImpl storeSCU, Association storeas, ArchiveInstanceLocator inst, Attributes attrs, String targetTransferSyntaxUID) {
+            this.storeSCU = storeSCU;
+            this.storeas = storeas;
+            this.inst = inst;
+            this.attrs = attrs;
+            this.targetTransferSyntaxUID = targetTransferSyntaxUID;
+
+            String sourceTransferSyntaxUID = inst.tsuid;
+
+            if (!targetTransferSyntaxUID.equals(sourceTransferSyntaxUID)) {
+                decompressor = new Decompressor(attrs, inst.tsuid);
+            } else {
+                decompressor = null;
+            }
+        }
+
+        @Override
+        public TaskType getTaskType() {
+            return ImageProcessingTaskTypes.TRANSCODE_OUTGOING;
+        }
+
+        @Override
+        public long getEstimatedWeight() {
+            if (decompressor != null)
+                return decompressor.getEstimatedNeededMemory();
+            else
+                return 0;
+        }
+
+        @Override
+        public Void call() throws IOException, InterruptedException {
+            try {
+                if (decompressor != null) {
+                    decompressor.decompress();
+                }
+
+                DataWriter dataWriter = new DataWriterAdapter(attrs);
+                storeSCU.cstore(storeas, inst, targetTransferSyntaxUID, dataWriter);
+
+                // nullify pixeldata so that memory can be freed before the task ends
+                attrs.setNull(Tag.PixelData, VR.OW);
+            } finally {
+                if (decompressor != null) {
+                    decompressor.dispose();
+
+                    // also remove reference to decompressor, to be able to free the memory
+                    decompressor = null;
+                }
+            }
+            return null;
+        }
+    }
 }

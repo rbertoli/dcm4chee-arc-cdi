@@ -49,15 +49,11 @@ import javax.ws.rs.core.StreamingOutput;
 import javax.ws.rs.core.UriInfo;
 
 import org.dcm4che3.data.Attributes;
-import org.dcm4che3.data.BulkData;
-import org.dcm4che3.data.Fragments;
-import org.dcm4che3.data.Tag;
-import org.dcm4che3.data.VR;
 import org.dcm4che3.io.DicomInputStream;
 import org.dcm4che3.io.DicomInputStream.IncludeBulkData;
 import org.dcm4che3.json.JSONWriter;
-import org.dcm4che3.util.SafeClose;
 import org.dcm4chee.archive.dto.ArchiveInstanceLocator;
+import org.dcm4chee.archive.entity.Utils;
 import org.dcm4chee.archive.store.scu.CStoreSCUContext;
 import org.dcm4chee.archive.store.scu.CStoreSCUService;
 import org.slf4j.Logger;
@@ -111,23 +107,15 @@ public class DicomJSONOutput implements StreamingOutput {
             } while (dataset == null);
 
             if (context.getRemoteAE() != null) {
-                service.coerceFileBeforeMerge((ArchiveInstanceLocator) ref,
-                        dataset, context);
-
+                service.coerceFileBeforeMerge(ref, dataset, context);
+            }
+            dataset = Utils.mergeAndNormalize(dataset, (Attributes) ref.getObject());
+            if (context.getRemoteAE() != null) {
                 service.coerceAttributes(dataset, context);
             }
 
-            dataset.addAll((Attributes) ref.getObject());
-            Object pixelData = dataset.getValue(Tag.PixelData);
-            if (pixelData instanceof Fragments) {
-                Fragments frags = (Fragments) pixelData;
-                dataset.setValue(
-                        Tag.PixelData,
-                        VR.OB,
-                        new BulkData(((BulkData) frags.get(1))
-                                .uriWithoutQuery(), 0, -1,
-                                dataset.bigEndian()));
-            }
+            DefaultWadoRS.replacePixelDataBulkDataURI(ref, dataset);
+
             writer.write(dataset);
         }
         gen.writeEnd();
@@ -135,7 +123,7 @@ public class DicomJSONOutput implements StreamingOutput {
     }
 
     private String toBulkDataURI(String uri) {
-        return uriInfo.getBaseUri() + "wado/" + aeTitle + "/bulkdata/"
+        return uriInfo.getBaseUri() + aeTitle + "/bulkdata/"
                 + URI.create(uri).getPath();
     }
 

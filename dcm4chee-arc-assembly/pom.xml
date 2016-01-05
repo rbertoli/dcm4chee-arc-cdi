@@ -4,7 +4,7 @@
   <parent>
     <groupId>org.dcm4che.dcm4chee-arc</groupId>
     <artifactId>dcm4chee-arc-parent</artifactId>
-    <version>4.4.0.Beta1</version>
+    <version>4.5.0-SNAPSHOT</version>
   </parent>
   <artifactId>dcm4chee-arc-assembly</artifactId>
   <packaging>pom</packaging>
@@ -32,10 +32,10 @@
       </plugin>
       <plugin>
         <artifactId>maven-assembly-plugin</artifactId>
-        <version>2.3</version>
         <configuration>
           <filters>
             <filter>${basedir}/../dcm4chee-arc-conf/src/main/config/jboss-cli/${db}.properties</filter>
+            <filter>${basedir}/../dcm4chee-arc-conf/src/main/config/jboss-cli/${cluster}.properties</filter>
           </filters>
           <descriptors>
             <descriptor>src/main/assembly/dist.xml</descriptor>
@@ -62,13 +62,6 @@
     </dependency>
     <dependency>
       <groupId>org.dcm4che.dcm4chee-arc</groupId>
-      <artifactId>dcm4chee-arc-ear</artifactId>
-      <version>${project.version}</version>
-      <classifier>${db}</classifier>
-      <type>ear</type>
-    </dependency>
-    <dependency>
-      <groupId>org.dcm4che.dcm4chee-arc</groupId>
       <artifactId>dcm4chee-arc-web</artifactId>
       <version>${project.version}</version>
       <type>war</type>
@@ -76,6 +69,12 @@
     <dependency>
       <groupId>org.dcm4che.dcm4chee-arc</groupId>
       <artifactId>json-jboss-modules</artifactId>
+      <version>${project.version}</version>
+      <type>zip</type>
+    </dependency>
+    <dependency>
+      <groupId>org.dcm4che.dcm4chee-arc</groupId>
+      <artifactId>dcm4chee-arc-jboss-modules</artifactId>
       <version>${project.version}</version>
       <type>zip</type>
     </dependency>
@@ -135,4 +134,67 @@
       <type>zip</type>
     </dependency>
   </dependencies>
+  <profiles>
+    <profile>
+      <id>default</id>
+      <activation>
+        <activeByDefault>true</activeByDefault>
+      </activation>
+      <dependencies>
+        <dependency>
+          <groupId>org.dcm4che.dcm4chee-arc</groupId>
+          <artifactId>dcm4chee-arc-ear</artifactId>
+          <version>${project.version}</version>
+          <classifier>${db}</classifier>
+          <type>ear</type>
+        </dependency>
+      </dependencies>
+    </profile>
+    <profile>
+      <id>arr-csp</id>
+      <build>
+        <finalName>dcm4chee-arc-arr-${project.version}</finalName>
+        <plugins>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-dependency-plugin</artifactId>
+            <version>2.10</version>
+            <executions>
+              <execution>
+                <id>copy</id>
+                <goals>
+                  <goal>copy</goal>
+                </goals>
+                <configuration>
+                  <artifactItems>
+                    <artifactItem>
+                      <groupId>org.dcm4che.dcm4chee-arr</groupId>
+                      <artifactId>dcm4chee-arr-cdi-conf-jbosscli</artifactId>
+                      <version>4.2.0-SNAPSOT</version>
+                      <type>cli</type>
+                      <overWrite>false</overWrite>
+                      <outputDirectory>${project.build.directory}/dcm4chee-arr</outputDirectory>
+                      <destFileName>arr-setup.cli</destFileName>
+                    </artifactItem>
+                  </artifactItems>
+                  <outputDirectory>${project.build.directory}/wars</outputDirectory>
+                  <overWriteReleases>false</overWriteReleases>
+                  <overWriteSnapshots>true</overWriteSnapshots>
+                </configuration>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+      <dependencies>
+        <dependency>
+          <groupId>org.dcm4che.dcm4chee-arc</groupId>
+          <artifactId>dcm4chee-arc-ear</artifactId>
+          <version>${project.version}</version>
+          <classifier>arr-${db}</classifier>
+          <type>ear</type>
+        </dependency>
+      </dependencies>
+    </profile>
+  </profiles>
 </project>

@@ -38,34 +38,18 @@
 
 package org.dcm4chee.archive.entity;
 
-import java.io.Serializable;
-import java.util.Collection;
-import java.util.Date;
-
-import javax.persistence.Basic;
-import javax.persistence.CascadeType;
-import javax.persistence.Column;
-import javax.persistence.Entity;
-import javax.persistence.FetchType;
-import javax.persistence.GeneratedValue;
-import javax.persistence.GenerationType;
-import javax.persistence.Id;
-import javax.persistence.JoinColumn;
-import javax.persistence.ManyToOne;
-import javax.persistence.NamedQueries;
-import javax.persistence.NamedQuery;
-import javax.persistence.OneToMany;
-import javax.persistence.OneToOne;
-import javax.persistence.PrePersist;
-import javax.persistence.PreUpdate;
-import javax.persistence.Table;
-import javax.persistence.Version;
-
 import org.dcm4che3.data.Attributes;
+import org.dcm4che3.data.DatePrecision;
 import org.dcm4che3.data.Tag;
 import org.dcm4che3.soundex.FuzzyStr;
-import org.dcm4che3.util.DateUtils;
 import org.dcm4chee.archive.conf.AttributeFilter;
+
+import javax.persistence.*;
+import java.io.Serializable;
+import java.util.Calendar;
+import java.util.Collection;
+import java.util.Date;
+import java.util.GregorianCalendar;
 
 /**
  * @author Damien Evans <damien.daddy@gmail.com>
@@ -74,6 +58,9 @@ import org.dcm4chee.archive.conf.AttributeFilter;
  * @author Michael Backhaus <michael.backhaus@agfa.com>
  */
 @NamedQueries({
+@NamedQuery(
+        name=Series.FIND_REJECTED,
+        query="SELECT se FROM Series se WHERE se.isRejected = TRUE"),
 @NamedQuery(
     name=Series.FIND_BY_SERIES_INSTANCE_UID,
     query="SELECT s FROM Series s WHERE s.seriesInstanceUID = ?1"),
@@ -119,10 +106,16 @@ public class Series implements Serializable {
 
     private static final long serialVersionUID = -8317105475421750944L;
 
+    public static final String FIND_REJECTED = "Series.findRejected";
+
     public static final String FIND_BY_SERIES_INSTANCE_UID = "Series.findBySeriesInstanceUID";
+
     public static final String FIND_BY_SERIES_INSTANCE_UID_EAGER = "Series.findBySeriesInstanceUID.eager";
+
     public static final String PATIENT_STUDY_SERIES_ATTRIBUTES = "Series.patientStudySeriesAttributes";
+
     public static final String FIND_BY_STUDY_INSTANCE_UID_AND_SOURCE_AET = "Series.findByStudyInstanceUIDAndSourceAET";
+
     public static final String FIND_BY_SERIES_INSTANCE_UID_FETCH_REQ_ATTRS = "Series.findBySeriesInstanceUIDFetchReqAttrs";
 
     @Id
@@ -134,86 +127,93 @@ public class Series implements Serializable {
     @Column(name = "version")
     private long version;    
 
-    @Basic(optional = false)
+    //@Basic(optional = false)
     @Column(name = "created_time", updatable = false)
     private Date createdTime;
 
-    @Basic(optional = false)
+    //@Basic(optional = false)
     @Column(name = "updated_time")
     private Date updatedTime;
 
-    @Basic(optional = false)
-    @Column(name = "series_iuid", updatable = false)
+    //@Basic(optional = false)
+    @Column(name = "series_iuid", updatable = false, unique = true)
     private String seriesInstanceUID;
 
-    @Basic(optional = false)
+    //@Basic(optional = false)
     @Column(name = "series_no")
     private String seriesNumber;
 
-    @Basic(optional = false)
+    //@Basic(optional = false)
     @Column(name = "series_desc")
     private String seriesDescription;
 
-    @Basic(optional = false)
+    //@Basic(optional = false)
     @Column(name = "modality")
     private String modality;
 
-    @Basic(optional = false)
+    //@Basic(optional = false)
     @Column(name = "department")
     private String institutionalDepartmentName;
 
-    @Basic(optional = false)
+    //@Basic(optional = false)
     @Column(name = "institution")
     private String institutionName;
 
-    @Basic(optional = false)
+    //@Basic(optional = false)
     @Column(name = "station_name")
     private String stationName;
 
-    @Basic(optional = false)
+    //@Basic(optional = false)
     @Column(name = "body_part")
     private String bodyPartExamined;
 
-    @Basic(optional = false)
+    //@Basic(optional = false)
     @Column(name = "laterality")
     private String laterality;
 
-    @Basic(optional = false)
-    @Column(name = "pps_start_date")
-    private String performedProcedureStepStartDate;
+    //@Basic(optional = false)
+    @Column(name = "pps_start", nullable=true)
+    private Date performedProcedureStepStartDateTime;
+//
+//    //@Basic(optional = false)
+//    @Column(name = "pps_start_time")
+//    private String performedProcedureStepStartTime;
 
-    @Basic(optional = false)
-    @Column(name = "pps_start_time")
-    private String performedProcedureStepStartTime;
-
-    @Basic(optional = false)
+    //@Basic(optional = false)
     @Column(name = "pps_iuid")
     private String performedProcedureStepInstanceUID;
 
-    @Basic(optional = false)
+    //@Basic(optional = false)
     @Column(name = "pps_cuid")
     private String performedProcedureStepClassUID;
 
-    @Basic(optional = false)
+    //@Basic(optional = false)
     @Column(name = "series_custom1")
     private String seriesCustomAttribute1;
 
-    @Basic(optional = false)
+    //@Basic(optional = false)
     @Column(name = "series_custom2")
     private String seriesCustomAttribute2;
 
-    @Basic(optional = false)
+    //@Basic(optional = false)
     @Column(name = "series_custom3")
     private String seriesCustomAttribute3;
 
     @Column(name = "src_aet")
     private String sourceAET;
 
+    @Column(name = "called_aets", nullable=true)
+    private String calledAETs;
+
+    //@Basic(optional = false)
+    @Column(name = "is_rejected")
+    private boolean isRejected;
+
     @OneToOne(fetch=FetchType.LAZY, cascade=CascadeType.ALL, orphanRemoval = true, optional = false)
     @JoinColumn(name = "dicomattrs_fk")
     private AttributesBlob attributesBlob;
 
-    @OneToOne(cascade=CascadeType.ALL, orphanRemoval = true)
+    @ManyToOne
     @JoinColumn(name = "perf_phys_name_fk")
     private PersonName performingPhysicianName;
 
@@ -255,11 +255,28 @@ public class Series implements Serializable {
         Date now = new Date();
         createdTime = now;
         updatedTime = now;
+
+        // update the study, which also has an important side-effect: it will increase the version field of the study.
+        // this is necessary to ensure correct calculation of derived fields for series/studies.
+        study.setUpdatedTime(now);
     }
 
     @PreUpdate
     public void onPreUpdate() {
-        updatedTime = new Date();
+        Date now = new Date();
+        updatedTime = now;
+
+        // update the study, which also has an important side-effect: it will increase the version field of the study.
+        // this is necessary to ensure correct calculation of derived fields for series/studies.
+        study.setUpdatedTime(now);
+    }
+
+    @PreRemove
+    public void onPreRemove() {
+        Date now = new Date();
+        // update the study, which also has an important side-effect: it will increase the version field of the study.
+        // this is necessary to ensure correct calculation of derived fields for series/studies.
+        study.setUpdatedTime(now);
     }
 
     public AttributesBlob getAttributesBlob() {
@@ -280,6 +297,10 @@ public class Series implements Serializable {
 
     public Date getUpdatedTime() {
         return updatedTime;
+    }
+
+    public void setUpdatedTime(Date updatedTime) {
+        this.updatedTime = updatedTime;
     }
 
     public String getSeriesInstanceUID() {
@@ -322,12 +343,16 @@ public class Series implements Serializable {
         return performingPhysicianName;
     }
 
-    public String getPerformedProcedureStepStartDate() {
-        return performedProcedureStepStartDate;
+    public void setPerformingPhysicianName(PersonName performingPhysicianName) {
+        this.performingPhysicianName = performingPhysicianName;
     }
 
-    public String getPerformedProcedureStepStartTime() {
-        return performedProcedureStepStartTime;
+    public Date getPerformedProcedureStepStartDateTime() {
+        return performedProcedureStepStartDateTime;
+    }
+
+    public void setPerformedProcedureStepStartDateTime(Date performedProcedureStepStartDateTime) {
+        this.performedProcedureStepStartDateTime = performedProcedureStepStartDateTime;
     }
 
     public String getPerformedProcedureStepInstanceUID() {
@@ -358,7 +383,23 @@ public class Series implements Serializable {
         this.sourceAET = sourceAET;
     }
 
-    public Code getInstitutionCode() {
+    public String getEncodedCalledAETs() {
+        return calledAETs;
+    }
+
+    public String[] getCalledAETs() {
+        return calledAETs.split("\\\\");
+    }
+
+    public void addCalledAET(String calledAET) {
+        if(this.calledAETs == null)
+        this.calledAETs = calledAET;
+        else
+            if(!calledAETs.contains(calledAET))
+            this.calledAETs+=  "\\" + calledAET;
+    }
+
+	public Code getInstitutionCode() {
         return institutionCode;
     }
 
@@ -374,6 +415,14 @@ public class Series implements Serializable {
         this.version = version;
     }
     
+    public boolean isRejected() {
+        return isRejected;
+    }
+
+    public void setRejected(boolean isRejected) {
+        this.isRejected = isRejected;
+    }
+
     public Collection<RequestAttributes> getRequestAttributes() {
         return requestAttributes;
     }
@@ -412,44 +461,37 @@ public class Series implements Serializable {
             queryAttributes.clear();
     }
 
-    public void setAttributes(Attributes attrs, AttributeFilter filter, FuzzyStr fuzzyStr) {
+    public void setAttributes(Attributes attrs, AttributeFilter filter, FuzzyStr fuzzyStr, String nullValue) {
         seriesInstanceUID = attrs.getString(Tag.SeriesInstanceUID);
-        seriesNumber = attrs.getString(Tag.SeriesNumber, "*");
-        seriesDescription = attrs.getString(Tag.SeriesDescription, "*");
-        institutionName = attrs.getString(Tag.InstitutionName, "*");
-        institutionalDepartmentName = attrs.getString(Tag.InstitutionalDepartmentName, "*");
-        modality = attrs.getString(Tag.Modality, "*").toUpperCase();
-        stationName = attrs.getString(Tag.StationName, "*");
-        bodyPartExamined = attrs.getString(Tag.BodyPartExamined, "*").toUpperCase();
-        laterality = attrs.getString(Tag.Laterality, "*").toUpperCase();
+        seriesNumber = attrs.getString(Tag.SeriesNumber, nullValue);
+        seriesDescription = attrs.getString(Tag.SeriesDescription, nullValue);
+        institutionName = attrs.getString(Tag.InstitutionName, nullValue);
+        institutionalDepartmentName = attrs.getString(Tag.InstitutionalDepartmentName, nullValue);
+        modality = Utils.upper(attrs.getString(Tag.Modality, nullValue));
+        stationName = attrs.getString(Tag.StationName, nullValue);
+        bodyPartExamined = Utils.upper(attrs.getString(Tag.BodyPartExamined, nullValue));
+        laterality = Utils.upper(attrs.getString(Tag.Laterality, nullValue));
         Attributes refPPS = attrs.getNestedDataset(Tag.ReferencedPerformedProcedureStepSequence);
         if (refPPS != null) {
-            performedProcedureStepInstanceUID = refPPS.getString(Tag.ReferencedSOPInstanceUID, "*");
-            performedProcedureStepClassUID = refPPS.getString(Tag.ReferencedSOPClassUID, "*");
+            performedProcedureStepInstanceUID = refPPS.getString(Tag.ReferencedSOPInstanceUID, nullValue);
+            performedProcedureStepClassUID = refPPS.getString(Tag.ReferencedSOPClassUID, nullValue);
         } else {
-            performedProcedureStepInstanceUID = "*";
-            performedProcedureStepClassUID = "*";
+            performedProcedureStepInstanceUID = nullValue;
+            performedProcedureStepClassUID = nullValue;
         }
-        Date dt = attrs.getDate(Tag.PerformedProcedureStepStartDateAndTime);
-        if (dt != null) {
-            performedProcedureStepStartDate = DateUtils.formatDA(null, dt);
-            performedProcedureStepStartTime = 
-                attrs.containsValue(Tag.PerformedProcedureStepStartDate)
-                    ? DateUtils.formatTM(null, dt)
-                    : "*";
-        } else {
-            performedProcedureStepStartDate = "*";
-            performedProcedureStepStartTime = "*";
+        Date dt = attrs.getDate(Tag.PerformedProcedureStepStartDateAndTime, new DatePrecision(Calendar.SECOND));
+        if(dt!=null) {
+            Calendar adjustedDateTimeCal = new GregorianCalendar();
+            adjustedDateTimeCal.setTime(dt);
+            adjustedDateTimeCal.set(Calendar.MILLISECOND, 0);
+        performedProcedureStepStartDateTime = adjustedDateTimeCal.getTime();
         }
-        performingPhysicianName = PersonName.valueOf(
-                attrs.getString(Tag.PerformingPhysicianName), fuzzyStr,
-                performingPhysicianName);
-        seriesCustomAttribute1 = 
-            AttributeFilter.selectStringValue(attrs, filter.getCustomAttribute1(), "*");
+        seriesCustomAttribute1 =
+            AttributeFilter.selectStringValue(attrs, filter.getCustomAttribute1(), nullValue);
         seriesCustomAttribute2 =
-            AttributeFilter.selectStringValue(attrs, filter.getCustomAttribute2(), "*");
+            AttributeFilter.selectStringValue(attrs, filter.getCustomAttribute2(), nullValue);
         seriesCustomAttribute3 =
-            AttributeFilter.selectStringValue(attrs, filter.getCustomAttribute3(), "*");
+            AttributeFilter.selectStringValue(attrs, filter.getCustomAttribute3(), nullValue);
 
         if (attributesBlob == null)
             attributesBlob = new AttributesBlob(new Attributes(attrs, filter.getCompleteSelection(attrs)));

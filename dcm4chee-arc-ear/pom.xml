@@ -6,11 +6,17 @@
   <parent>
     <groupId>org.dcm4che.dcm4chee-arc</groupId>
     <artifactId>dcm4chee-arc-parent</artifactId>
-    <version>4.4.0.Beta1</version>
+    <version>4.5.0-SNAPSHOT</version>
   </parent>
   <artifactId>dcm4chee-arc-ear</artifactId>
   <packaging>ear</packaging>
   <dependencies>
+    <dependency>
+      <groupId>org.dcm4che.dcm4chee-arc</groupId>
+      <artifactId>dcm4chee-arc-core</artifactId>
+      <version>${project.version}</version>
+      <type>ejb</type>
+    </dependency>
     <dependency>
       <groupId>org.dcm4che.dcm4chee-arc</groupId>
       <artifactId>dcm4chee-arc-conf</artifactId>
@@ -19,6 +25,11 @@
     <dependency>
       <groupId>org.dcm4che.dcm4chee-arc</groupId>
       <artifactId>dcm4chee-arc-conf-producer</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.dcm4che.dcm4chee-arc</groupId>
+      <artifactId>dcm4chee-arc-dynamic-decorators</artifactId>
       <version>${project.version}</version>
     </dependency>
     <dependency>
@@ -81,6 +92,12 @@
     </dependency>
     <dependency>
       <groupId>org.dcm4che.dcm4chee-arc</groupId>
+      <artifactId>dcm4chee-arc-location-mgmt</artifactId>
+      <version>${project.version}</version>
+      <type>ejb</type>
+    </dependency>
+    <dependency>
+      <groupId>org.dcm4che.dcm4chee-arc</groupId>
       <artifactId>dcm4chee-arc-store-scp</artifactId>
       <version>${project.version}</version>
     </dependency>
@@ -93,6 +110,7 @@
       <groupId>org.dcm4che.dcm4chee-arc</groupId>
       <artifactId>dcm4chee-arc-store-scu</artifactId>
       <version>${project.version}</version>
+      <type>ejb</type>
     </dependency>
     <dependency>
       <groupId>org.dcm4che.dcm4chee-arc</groupId>
@@ -167,6 +185,12 @@
       <version>${project.version}</version>
       <type>ejb</type>
     </dependency>
+	<dependency>
+      <groupId>org.dcm4che.dcm4chee-arc</groupId>
+      <artifactId>dcm4chee-arc-processing</artifactId>
+      <version>${project.version}</version>
+      <type>ejb</type>
+    </dependency>
     <dependency>
       <groupId>org.dcm4che.dcm4chee-arc</groupId>
       <artifactId>dcm4chee-arc-mpps-scu</artifactId>
@@ -175,14 +199,15 @@
     </dependency>
     <dependency>
       <groupId>org.dcm4che.dcm4chee-arc</groupId>
-      <artifactId>dcm4chee-arc-ian-scu</artifactId>
+      <artifactId>dcm4chee-arc-api-impl</artifactId>
       <version>${project.version}</version>
       <type>ejb</type>
     </dependency>
     <dependency>
       <groupId>org.dcm4che.dcm4chee-arc</groupId>
-      <artifactId>dcm4chee-arc-ctrl</artifactId>
+      <artifactId>dcm4chee-arc-ian-scu</artifactId>
       <version>${project.version}</version>
+      <type>ejb</type>
     </dependency>
     <dependency>
       <groupId>org.dcm4che.dcm4chee-arc</groupId>
@@ -207,6 +232,18 @@
     </dependency>
     <dependency>
       <groupId>org.dcm4che.dcm4chee-arc</groupId>
+      <artifactId>dcm4chee-arc-iocm-client</artifactId>
+      <version>${project.version}</version>
+      <type>ejb</type>
+    </dependency>
+    <dependency>
+      <groupId>org.dcm4che.dcm4chee-arc</groupId>
+      <artifactId>dcm4chee-arc-noniocm</artifactId>
+      <version>${project.version}</version>
+      <type>ejb</type>
+    </dependency>
+    <dependency>
+      <groupId>org.dcm4che.dcm4chee-arc</groupId>
       <artifactId>dcm4chee-arc-mima</artifactId>
       <version>${project.version}</version>
     </dependency>
@@ -225,6 +262,38 @@
       <artifactId>dcm4chee-arc-war-skinny</artifactId>
       <version>${project.version}</version>
       <type>war</type>
+    </dependency>
+    <dependency>
+      <groupId>org.dcm4che.dcm4chee-arc</groupId>
+      <artifactId>dcm4chee-arc-prefetch</artifactId>
+      <version>${project.version}</version>
+      <type>ejb</type>
+    </dependency>
+    <dependency>
+      <groupId>org.dcm4che.dcm4chee-arc</groupId>
+      <artifactId>dcm4chee-arc-stow-client</artifactId>
+      <version>${project.version}</version>
+      <type>ejb</type>
+    </dependency>
+    <dependency>
+      <groupId>org.dcm4che.dcm4chee-arc</groupId>
+      <artifactId>dcm4chee-arc-copy-schedule</artifactId>
+      <version>${project.version}</version>
+     <type>ejb</type>
+    </dependency>
+    <dependency>
+      <groupId>org.dcm4che.dcm4chee-arc</groupId>
+      <artifactId>dcm4chee-arc-rs-common</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.dcm4che.dcm4chee-arc</groupId>
+      <artifactId>dcm4chee-arc-sc</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.dcm4che.dcm4chee</groupId>
+      <artifactId>dcm4chee-ee-core</artifactId>
     </dependency>
     <dependency>
       <groupId>org.dcm4che.dcm4chee-storage</groupId>
@@ -275,32 +344,174 @@
       <groupId>org.dcm4che.dcm4chee-conf</groupId>
       <artifactId>dcm4chee-conf-web</artifactId>
       <type>war</type>
-      <classifier>arc${conf-web-classifier}</classifier>
+      <classifier>${conf-web-classifier}</classifier>
     </dependency>
     <dependency>
       <groupId>org.dcm4che.dcm4chee-conf</groupId>
       <artifactId>dcm4chee-conf-cdi</artifactId>
+      <version>${dcm4chee-conf.version}</version>
+      <type>ejb</type>
     </dependency>
-
+    <dependency>
+      <groupId>org.dcm4che.dcm4chee-monitoring</groupId>
+      <artifactId>dcm4chee-monitoring-api</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.dcm4che.dcm4chee-arc</groupId>
+      <artifactId>dcm4chee-arc-war-webservices</artifactId>
+      <version>${project.version}</version>
+      <type>war</type>
+    </dependency>
   </dependencies>
   <profiles>
     <profile>
-      <id>monitoring</id>
+      <id>jmelody</id>
+      <dependencies>
+        <dependency>
+          <groupId>net.bull.javamelody</groupId>
+          <artifactId>javamelody-core</artifactId>
+          <version>1.55.0</version>
+        </dependency>    
+      </dependencies>      
+    </profile>
+    <profile>
+      <id>csp</id>
+      <dependencies>
+        <dependency>
+          <groupId>org.dcm4che.dcm4chee-arc</groupId>
+          <artifactId>dcm4chee-arc-conf-default</artifactId>
+          <version>${project.version}</version>
+        </dependency>
+      </dependencies>
+    </profile>
+    <profile>
+      <id>conf-db</id>
       <activation>
         <property>
-          <name>monitoring</name>
+          <name>conf-db</name>
+          <value>true</value>
+        </property>
+      </activation>     
+      <dependencies>
+        <dependency>
+          <groupId>org.dcm4che.dcm4chee-conf</groupId>
+          <artifactId>dcm4chee-conf-db</artifactId>
+          <version>${dcm4chee-conf.version}</version>
+          <type>ejb</type>
+        </dependency>
+      </dependencies>
+    </profile>
+    <profile>
+      <id>perf-monitoring</id>
+      <activation>
+        <property>
+          <name>perf-monitoring</name>
           <value>true</value>
         </property>
       </activation>        
       <dependencies>
-	    <dependency>
-	      <groupId>net.bull.javamelody</groupId>
-	      <artifactId>javamelody-core</artifactId>
-	      <version>1.55.0</version>
-	    </dependency>    
-	  </dependencies>      
+        <dependency>
+          <groupId>org.dcm4che.dcm4chee-monitoring</groupId>
+          <artifactId>dcm4chee-monitoring-provider</artifactId>
+          <version>${dcm4chee-monitoring.version}</version>
+          <type>ejb</type>
+        </dependency>
+        <dependency>
+          <groupId>org.dcm4che.dcm4chee-monitoring</groupId>
+          <artifactId>dcm4chee-monitoring-core</artifactId>
+          <version>${dcm4chee-monitoring.version}</version>
+        </dependency>
+        <dependency>
+          <groupId>org.dcm4che.dcm4chee-monitoring</groupId>
+          <artifactId>dcm4chee-monitoring-rs</artifactId>
+          <version>${dcm4chee-monitoring.version}</version>
+          <type>war</type>
+        </dependency>
+        <dependency>
+          <groupId>org.dcm4che.dcm4chee-monitoring</groupId>
+          <artifactId>dcm4chee-monitoring-jdbc</artifactId>
+          <version>${dcm4chee-monitoring.version}</version>
+        </dependency>
+      </dependencies>
+      <build>
+        <plugins>
+          <plugin>
+            <artifactId>maven-ear-plugin</artifactId>
+            <configuration>
+              <modules combine.children="append">
+                <webModule>
+                  <groupId>org.dcm4che.dcm4chee-monitoring</groupId>
+                  <artifactId>dcm4chee-monitoring-rs</artifactId>
+                  <contextRoot>monitoring-service</contextRoot>
+                </webModule>
+              </modules>
+            </configuration>
+          </plugin>
+        </plugins>
+      </build>
     </profile>
-
+    <profile>
+      <id>arr-csp</id>
+      <activation>
+        <property>
+          <name>arr-csp</name>
+          <value>true</value>
+        </property>
+      </activation>
+      <dependencies>
+        <dependency>
+          <groupId>org.dcm4che.dcm4chee-arr</groupId>
+          <artifactId>dcm4chee-arr-cdi-war-skinny</artifactId>
+          <classifier>${db}</classifier>
+          <type>war</type>
+          <version>${dcm4chee-arr.version}</version>
+        </dependency>
+        <dependency>
+          <groupId>org.dcm4che.dcm4chee-arr</groupId>
+          <artifactId>dcm4chee-arr-web</artifactId>
+          <type>war</type>
+          <version>${dcm4chee-arr.version}</version>
+        </dependency>
+        <dependency>
+          <groupId>org.dcm4che.dcm4chee-arr</groupId>
+          <artifactId>dcm4chee-arr-conf-default</artifactId>
+          <version>${dcm4chee-arr.version}</version>
+        </dependency>
+      </dependencies>
+      <build>
+        <plugins>
+          <plugin>
+            <artifactId>maven-ear-plugin</artifactId>
+            <configuration>
+              <classifier>arr-${db}</classifier>
+              <defaultLibBundleDir>lib</defaultLibBundleDir>
+              <modules combine.children="append">
+                <webModule>
+                  <groupId>org.dcm4che.dcm4chee-arc</groupId>
+                  <artifactId>dcm4chee-arc-war-skinny</artifactId>
+                  <contextRoot>dcm4chee-arc</contextRoot>
+                </webModule>
+                <webModule>
+                  <groupId>org.dcm4che.dcm4chee-conf</groupId>
+                  <artifactId>dcm4chee-conf-web</artifactId>
+                  <contextRoot>config</contextRoot>
+                </webModule>
+                <webModule>
+                  <groupId>org.dcm4che.dcm4chee-arr</groupId>
+                  <artifactId>dcm4chee-arr-cdi-war-skinny</artifactId>
+                  <contextRoot>dcm4chee-arr</contextRoot>
+                </webModule>
+                <webModule>
+                  <groupId>org.dcm4che.dcm4chee-arr</groupId>
+                  <artifactId>dcm4chee-arr-web</artifactId>
+                  <contextRoot>dcm4chee-arr-web</contextRoot>
+                </webModule>
+              </modules>
+            </configuration>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
   </profiles>
   <build>
     <plugins>
@@ -309,7 +520,7 @@
         <configuration>
           <classifier>${db}</classifier>
           <defaultLibBundleDir>lib</defaultLibBundleDir>
-          <modules>
+          <modules combine.children="append">
             <webModule>
               <groupId>org.dcm4che.dcm4chee-arc</groupId>
               <artifactId>dcm4chee-arc-war-skinny</artifactId>
@@ -319,6 +530,11 @@
               <groupId>org.dcm4che.dcm4chee-conf</groupId>
               <artifactId>dcm4chee-conf-web</artifactId>
               <contextRoot>config</contextRoot>
+            </webModule>
+            <webModule>
+              <groupId>org.dcm4che.dcm4chee-arc</groupId>
+              <artifactId>dcm4chee-arc-war-webservices</artifactId>
+              <contextRoot>dicom-web</contextRoot>
             </webModule>
           </modules>
         </configuration>

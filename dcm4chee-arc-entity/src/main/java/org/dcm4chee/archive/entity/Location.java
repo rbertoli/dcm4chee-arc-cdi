@@ -39,6 +39,7 @@
 package org.dcm4chee.archive.entity;
 
 import java.io.Serializable;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Date;
 
@@ -50,6 +51,8 @@ import javax.persistence.Enumerated;
 import javax.persistence.GeneratedValue;
 import javax.persistence.GenerationType;
 import javax.persistence.Id;
+import javax.persistence.JoinColumn;
+import javax.persistence.JoinTable;
 import javax.persistence.ManyToMany;
 import javax.persistence.NamedQueries;
 import javax.persistence.NamedQuery;
@@ -60,14 +63,30 @@ import javax.persistence.Table;
  * @author Damien Evans <damien.daddy@gmail.com>
  * @author Justin Falk <jfalkmu@gmail.com>
  * @author Gunter Zeilinger <gunterze@gmail.com>
+ * @author Hermann Czedik-Eysenberg <hermann-agfa@czedik.net>
+ * @author Hesham Elbadawi <bsdreko@gmail.com>
  */
 @NamedQueries({
-@NamedQuery(
-    name=Location.FIND_BY_STATUS_AND_STORAGE_GROUP_IDS,
-    query = "SELECT l FROM Location l "
-            + "WHERE l.status = ?1 "
-            + "AND l.createdTime < ?2 "
-            + "AND l.storageSystemGroupID IN (?3)")
+        @NamedQuery(
+                name = Location.FIND_BY_STATUS_AND_STORAGE_GROUP_IDS,
+                query = "SELECT l FROM Location l "
+                        + "WHERE l.status = ?1 "
+                        + "AND l.createdTime < ?2 "
+                        + "AND l.storageSystemGroupID IN (?3)"),
+        @NamedQuery(
+                name = Location.COUNT_BY_STORAGE_GROUP,
+                query = "SELECT COUNT(l) FROM Location l "
+                        + "WHERE l.storageSystemGroupID = :storageSystemGroupID"),
+        @NamedQuery(
+                name = Location.COUNT_BY_STORAGE_GROUP_AND_STORAGE_SYSTEM,
+                query = "SELECT COUNT(l) FROM Location l "
+                        + "WHERE l.storageSystemGroupID = :storageSystemGroupID "
+                        + "AND l.storageSystemID = :storageSystemID"),
+        @NamedQuery(
+                name = Location.CALCULATE_SUM_DATA_VOLUME_PER_DAY,
+                query = "SELECT SUM(l.size) FROM Location l "
+                        + "WHERE l.storageSystemGroupID = ?1 "
+                        + "AND l.createdTime >= ?2")
 })
 @Entity
 @Table(name = "location")
@@ -75,12 +94,17 @@ public class Location implements Serializable {
 
     private static final long serialVersionUID = -3832203362617593125L;
 
-    public static final String FIND_BY_STATUS_AND_STORAGE_GROUP_IDS =
-            "Location.findByStatusAndStorageGroupIDS";
+    public static final String FIND_BY_STATUS_AND_STORAGE_GROUP_IDS = "Location.findByStatusAndStorageGroupIDS";
+
+    public static final String COUNT_BY_STORAGE_GROUP = "Location.countByStorageGroup";
+
+    public static final String COUNT_BY_STORAGE_GROUP_AND_STORAGE_SYSTEM = "Location.countByStorageGroupAndStorageSystem";
+
+    public static final String CALCULATE_SUM_DATA_VOLUME_PER_DAY = "Location.calculateAverageDataVolumePerDay";;
 
     public enum Status {
         OK, DELETE_FAILED, TO_ARCHIVE, ARCHIVED, ARCHIVE_FAILED, QUERY_FAILED, VERIFY_FAILED
-    };
+    }
 
     @Id
     @GeneratedValue(strategy=GenerationType.IDENTITY)
@@ -136,7 +160,10 @@ public class Location implements Serializable {
     @Column(name = "wo_bulkdata", updatable = false)
     private boolean withoutBulkData;
 
-    @ManyToMany(mappedBy="locations")
+    @ManyToMany
+    @JoinTable(name="rel_instance_location",
+            joinColumns={@JoinColumn(name="location_fk", referencedColumnName="pk")},
+            inverseJoinColumns={@JoinColumn(name="instance_fk", referencedColumnName="pk")})
     private Collection<Instance> instances;
 
     public static final class Builder {
@@ -300,6 +327,12 @@ public class Location implements Serializable {
 
     public void setInstances(Collection<Instance> instances) {
         this.instances = instances;
+    }
+
+    public void addInstance(Instance instance) {
+        if (instances == null)
+            instances = new ArrayList<>(1);
+        instances.add(instance);
     }
 
     @Override

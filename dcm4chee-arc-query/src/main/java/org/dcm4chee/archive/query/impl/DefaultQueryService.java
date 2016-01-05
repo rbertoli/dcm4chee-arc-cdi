@@ -38,29 +38,20 @@
 
 package org.dcm4chee.archive.query.impl;
 
-import java.util.Date;
-import java.util.EnumSet;
-
-import javax.enterprise.context.ApplicationScoped;
-import javax.inject.Inject;
-import javax.persistence.EntityManager;
-import javax.persistence.PersistenceContext;
-import javax.xml.transform.Templates;
-import javax.xml.transform.Transformer;
-
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.IDWithIssuer;
 import org.dcm4che3.io.SAXTransformer;
 import org.dcm4che3.io.SAXTransformer.SetupTransformer;
-import org.dcm4che3.net.Dimse;
-import org.dcm4che3.net.QueryOption;
-import org.dcm4che3.net.Status;
-import org.dcm4che3.net.TransferCapability;
+import org.dcm4che3.net.*;
 import org.dcm4che3.net.service.DicomServiceException;
 import org.dcm4che3.util.DateUtils;
 import org.dcm4chee.archive.conf.ArchiveAEExtension;
+import org.dcm4chee.archive.conf.ArchiveDeviceExtension;
 import org.dcm4chee.archive.conf.QueryParam;
+import org.dcm4chee.archive.conf.QueryRetrieveView;
+import org.dcm4chee.archive.entity.Series;
 import org.dcm4chee.archive.entity.SeriesQueryAttributes;
+import org.dcm4chee.archive.entity.Study;
 import org.dcm4chee.archive.entity.StudyQueryAttributes;
 import org.dcm4chee.archive.query.Query;
 import org.dcm4chee.archive.query.QueryContext;
@@ -70,6 +61,15 @@ import org.hibernate.StatelessSession;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.enterprise.context.ApplicationScoped;
+import javax.inject.Inject;
+import javax.persistence.EntityManager;
+import javax.persistence.PersistenceContext;
+import javax.xml.transform.Templates;
+import javax.xml.transform.Transformer;
+import java.util.Date;
+import java.util.EnumSet;
+
 /**
  * @author Gunter Zeilinger <gunterze@gmail.com>
  * @author Hesham Elbadawi <bsdreko@gmail.com>
@@ -77,13 +77,16 @@ import org.slf4j.LoggerFactory;
 @ApplicationScoped
 public class DefaultQueryService implements QueryService {
 
-    static Logger LOG = LoggerFactory.getLogger(DefaultQueryService.class);
+    private static Logger LOG = LoggerFactory.getLogger(DefaultQueryService.class);
 
-    @PersistenceContext(unitName = "dcm4chee-arc")
+    @PersistenceContext(name = "dcm4chee-arc", unitName = "dcm4chee-arc")
     private EntityManager em;
 
     @Inject
     QueryServiceEJB ejb;
+
+    @Inject
+    Device device;
 
     StatelessSession openStatelessSession() {
         return em.unwrap(Session.class).getSessionFactory()
@@ -220,12 +223,41 @@ public class DefaultQueryService implements QueryService {
 
     @Override
     public StudyQueryAttributes createStudyView(Long studyPk, QueryParam queryParam) {
+        if (queryParam == null || queryParam.getQueryRetrieveView() == null) throw new IllegalArgumentException("Cannot create study view - queryParam/queryRetrieveView cannot be null");
         return ejb.calculateStudyQueryAttributes(studyPk, queryParam);
     }
 
     @Override
     public SeriesQueryAttributes createSeriesView(Long seriesPk, QueryParam queryParam) {
+        if (queryParam == null || queryParam.getQueryRetrieveView() == null) throw new IllegalArgumentException("Cannot create series view - queryParam/queryRetrieveView cannot be null");
         return ejb.calculateSeriesQueryAttributes(seriesPk, queryParam);
     }
 
+    @Override
+    public void calculateDerivedFields(Study study, ApplicationEntity ae) {
+        LOG.info("Calculating derived fields");
+        ArchiveDeviceExtension arcDevExt = device.getDeviceExtension(ArchiveDeviceExtension.class);
+
+        ArchiveAEExtension arcAEExt = ae.getAEExtension(ArchiveAEExtension.class);
+        QueryRetrieveView view = arcDevExt.getQueryRetrieveView(arcAEExt.getQueryRetrieveViewID());
+        if (view == null) {
+            LOG.warn("Cannot re-calculate derived fields - query retrieve view ID is not specified for AE {}", ae.getAETitle());
+            return;
+        }
+
+        QueryParam param = new QueryParam();
+        param.setQueryRetrieveView(view);
+
+        try {
+            //create study view
+            createStudyView(study.getPk(), param);
+
+            //create series view
+            for (Series series : study.getSeries())
+                createSeriesView(series.getPk(), param);
+
+        } catch (Exception e) {
+            LOG.error("Error while calculating derived fields on MPPS COMPLETE", e);
+        }
+    }
 }

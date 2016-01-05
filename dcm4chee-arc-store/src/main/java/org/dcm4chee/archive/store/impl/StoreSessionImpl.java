@@ -38,12 +38,6 @@
 
 package org.dcm4chee.archive.store.impl;
 
-import java.nio.file.Path;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.util.HashMap;
-import java.util.TimeZone;
-
 import org.dcm4che3.net.ApplicationEntity;
 import org.dcm4che3.net.Device;
 import org.dcm4chee.archive.conf.ArchiveAEExtension;
@@ -52,6 +46,14 @@ import org.dcm4chee.archive.dto.Participant;
 import org.dcm4chee.archive.store.StoreService;
 import org.dcm4chee.archive.store.StoreSession;
 import org.dcm4chee.storage.conf.StorageSystem;
+
+import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.TimeZone;
 
 /**
  * @author Gunter Zeilinger <gunterze@gmail.com>
@@ -67,10 +69,12 @@ public class StoreSessionImpl implements StoreSession {
     private MessageDigest messageDigest;
     private StorageSystem storageSystem;
     private StorageSystem metaDataStorageSystem;
+    private StorageSystem spoolStorageSystem;
     private Path spoolDirectory;
     private HashMap<String,Object> properties = new HashMap<String,Object>();
     private ApplicationEntity remoteAE;
-
+    private List<String> storedFiles = new ArrayList<String>();
+    
     public StoreSessionImpl(StoreService storeService) {
         this.storeService = storeService;
     }
@@ -122,7 +126,6 @@ public class StoreSessionImpl implements StoreSession {
 
     @Override
     public void setArchiveAEExtension(ArchiveAEExtension arcAE) {
-        this.arcAE = arcAE;
         this.arcAE = arcAE;
         this.storeParam = arcAE.getStoreParam();
     }
@@ -218,6 +221,26 @@ public class StoreSessionImpl implements StoreSession {
     @Override
     public TimeZone getSourceDeviceTimeZone() {
         return getSourceDevice() != null ? getSourceDevice().getTimeZoneOfDevice() : null;
+    }
+
+    @Override
+    public void setSpoolStorageSystem(StorageSystem spoolStorageSystem) {
+        this.spoolStorageSystem = spoolStorageSystem;
+    }
+
+    @Override
+    public StorageSystem getSpoolStorageSystem() {
+        return spoolStorageSystem;
+    }
+
+    @Override
+    public List<String> getStoredFiles() {
+        return storedFiles;
+    }
+
+    @Override
+    public void addStoredFile(String storedFile) {
+        this.storedFiles.add(storedFile);
     }
 }
 

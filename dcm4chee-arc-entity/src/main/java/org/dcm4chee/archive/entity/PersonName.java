@@ -38,25 +38,16 @@
 
 package org.dcm4chee.archive.entity;
 
-import static org.dcm4che3.data.PersonName.Group;
-import static org.dcm4che3.data.PersonName.Component;
-
 import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Iterator;
 
-import javax.persistence.CascadeType;
-import javax.persistence.Column;
-import javax.persistence.Entity;
-import javax.persistence.GeneratedValue;
-import javax.persistence.GenerationType;
-import javax.persistence.Id;
-import javax.persistence.OneToMany;
-import javax.persistence.Table;
+import javax.persistence.*;
 
+import org.dcm4che3.data.PersonName.Component;
+import org.dcm4che3.data.PersonName.Group;
 import org.dcm4che3.soundex.FuzzyStr;
-import org.hibernate.sql.Update;
 
 /**
  * @author Gunter Zeilinger <gunterze@gmail.com>
@@ -123,12 +114,12 @@ public class PersonName implements Serializable {
 
     public PersonName() {
     }
-    
-    public PersonName(org.dcm4che3.data.PersonName pn, FuzzyStr fuzzyStr) {
-        fromDicom(pn, fuzzyStr);
+
+    public PersonName(org.dcm4che3.data.PersonName pn, FuzzyStr fuzzyStr, String nullValueStr) {
+        fromDicom(pn, fuzzyStr, nullValueStr);
     }
 
-    private void fromDicom(org.dcm4che3.data.PersonName pn, FuzzyStr fuzzyStr) {
+    public void fromDicom(org.dcm4che3.data.PersonName pn, FuzzyStr fuzzyStr, String nullValueStr) {
         familyName = pn.get(Group.Alphabetic, Component.FamilyName);
         givenName = pn.get(Group.Alphabetic, Component.GivenName);
         middleName = pn.get(Group.Alphabetic, Component.MiddleName);
@@ -144,38 +135,37 @@ public class PersonName implements Serializable {
         phoneticMiddleName = pn.get(Group.Phonetic, Component.MiddleName);
         phoneticNamePrefix = pn.get(Group.Phonetic, Component.NamePrefix);
         phoneticNameSuffix = pn.get(Group.Phonetic, Component.NameSuffix);
-        createOrUpdateSoundexCodes(familyName, givenName, middleName,
-                    fuzzyStr);
+        createOrUpdateSoundexCodes(fuzzyStr, nullValueStr, familyName, givenName, middleName);
     }
 
-    private void createOrUpdateSoundexCodes(String familyName,
-            String givenName, String middleName, FuzzyStr fuzzyStr) {
-        
+    private void createOrUpdateSoundexCodes(FuzzyStr fuzzy, String nullValueStr, String familyName,
+            String givenName, String middleName) {
+        createOrUpdateSoundexCode(Component.FamilyName, familyName, fuzzy, nullValueStr);
+        createOrUpdateSoundexCode(Component.GivenName, givenName, fuzzy, nullValueStr);
+        createOrUpdateSoundexCode(Component.MiddleName, middleName, fuzzy, nullValueStr);
+    }
+
+    private void createOrUpdateSoundexCode(Component component, String name, FuzzyStr fuzzy, String nullValue) {
+        if (name == null || component == null || fuzzy == null)
+            return;
+
         if (soundexCodes == null)
             soundexCodes = new ArrayList<SoundexCode>();
         else
-            for (Iterator<SoundexCode> iterator = soundexCodes.iterator(); 
-                    iterator.hasNext();) {
-                iterator.next();
-                iterator.remove();
+            for (Iterator<SoundexCode> iterator = soundexCodes.iterator(); iterator.hasNext();) {
+                SoundexCode code = iterator.next();
+                if (code.getPersonNameComponent().equals(component))
+                    iterator.remove();
             }
-
-        addSoundexCodesTo(Component.FamilyName, familyName, fuzzyStr, soundexCodes);
-        addSoundexCodesTo(Component.GivenName, givenName, fuzzyStr, soundexCodes);
-        addSoundexCodesTo(Component.MiddleName, middleName, fuzzyStr, soundexCodes);
-    }
-
-    private void addSoundexCodesTo(Component component, String name,
-            FuzzyStr fuzzyStr, Collection<SoundexCode> codes) {
-        if (name == null)
-            return;
 
         Iterator<String> parts = SoundexCode.tokenizePersonNameComponent(name);
         for (int i = 0; parts.hasNext(); i++) {
-            SoundexCode soundexCode = new SoundexCode(component, i,
-                    fuzzyStr.toFuzzy(parts.next()));
-            soundexCode.setPersonName(this);
-            codes.add(soundexCode);
+            String fuzzyValue = fuzzy.toFuzzy(parts.next());
+            if (fuzzyValue.length()>0) {
+                SoundexCode soundexCode = new SoundexCode(component, i, fuzzyValue, nullValue);
+                soundexCode.setPersonName(this);
+                soundexCodes.add(soundexCode);
+            }
         }
     }
 
@@ -199,22 +189,21 @@ public class PersonName implements Serializable {
         return pn;
     }
 
-    public static PersonName valueOf(String s, FuzzyStr fuzzyStr,
-            PersonName prev) {
+    public static PersonName valueOf(String s, FuzzyStr fuzzyStr, String nullValueStr, PersonName prev) {
         if (s == null)
             return null;
 
-        org.dcm4che3.data.PersonName pn = new org.dcm4che3.data.PersonName(s,
-                true);
+        org.dcm4che3.data.PersonName pn = new org.dcm4che3.data.PersonName(s,true);
+
         if (pn.isEmpty())
             return null;
 
         if (prev != null) {
             if (!pn.equals(prev.toPersonName()))
-                prev.fromDicom(pn, fuzzyStr); //update values
+                prev.fromDicom(pn, fuzzyStr, nullValueStr); //update values
             return prev;
         } else
-            return new PersonName(pn, fuzzyStr); //create new
+            return new PersonName(pn, fuzzyStr, nullValueStr); //create new
     }
     
     @Override
@@ -230,24 +219,27 @@ public class PersonName implements Serializable {
         return familyName;
     }
 
-    public void setFamilyName(String familyName) {
+    public void setFamilyName(String familyName, FuzzyStr fuzzy, String nullValue) {
         this.familyName = familyName;
+        createOrUpdateSoundexCode(Component.FamilyName, familyName, fuzzy, nullValue);
     }
 
     public String getGivenName() {
         return givenName;
     }
 
-    public void setGivenName(String givenName) {
+    public void setGivenName(String givenName, FuzzyStr fuzzy, String nullValue) {
         this.givenName = givenName;
+        createOrUpdateSoundexCode(Component.GivenName, givenName, fuzzy, nullValue);
     }
 
     public String getMiddleName() {
         return middleName;
     }
 
-    public void setMiddleName(String middleName) {
+    public void setMiddleName(String middleName, FuzzyStr fuzzy, String nullValue) {
         this.middleName = middleName;
+        createOrUpdateSoundexCode(Component.MiddleName, middleName, fuzzy, nullValue);
     }
 
     public String getNamePrefix() {

@@ -38,40 +38,21 @@
 
 package org.dcm4chee.archive.entity;
 
-import java.io.Serializable;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Date;
-
-import javax.persistence.Basic;
-import javax.persistence.CascadeType;
-import javax.persistence.Column;
-import javax.persistence.Entity;
-import javax.persistence.FetchType;
-import javax.persistence.GeneratedValue;
-import javax.persistence.GenerationType;
-import javax.persistence.Id;
-import javax.persistence.JoinColumn;
-import javax.persistence.JoinTable;
-import javax.persistence.ManyToMany;
-import javax.persistence.ManyToOne;
-import javax.persistence.NamedQueries;
-import javax.persistence.NamedQuery;
-import javax.persistence.OneToMany;
-import javax.persistence.OneToOne;
-import javax.persistence.PrePersist;
-import javax.persistence.PreUpdate;
-import javax.persistence.Table;
-import javax.persistence.Transient;
-import javax.persistence.Version;
-
 import org.dcm4che3.data.Attributes;
+import org.dcm4che3.data.DatePrecision;
 import org.dcm4che3.data.Tag;
 import org.dcm4che3.soundex.FuzzyStr;
-import org.dcm4che3.util.DateUtils;
 import org.dcm4che3.util.StringUtils;
 import org.dcm4chee.archive.conf.AttributeFilter;
 import org.dcm4chee.storage.conf.Availability;
+import org.hibernate.annotations.OptimisticLock;
+
+import javax.persistence.*;
+import java.io.Serializable;
+import java.util.Calendar;
+import java.util.Collection;
+import java.util.Date;
+import java.util.GregorianCalendar;
 
 /**
  * @author Damien Evans <damien.daddy@gmail.com>
@@ -134,51 +115,48 @@ public class Instance implements Serializable {
     @Column(name = "version")
     private long version;  
 
-    @Basic(optional = false)
+    //@Basic(optional = false)
     @Column(name = "created_time", updatable = false)
     private Date createdTime;
 
-    @Basic(optional = false)
+    //@Basic(optional = false)
     @Column(name = "updated_time")
     private Date updatedTime;
 
-    @Basic(optional = false)
-    @Column(name = "sop_iuid", updatable = false)
+    //@Basic(optional = false)
+
+    @Column(name = "sop_iuid", updatable = false, unique = true)
     private String sopInstanceUID;
 
-    @Basic(optional = false)
+    //@Basic(optional = false)
     @Column(name = "sop_cuid", updatable = false)
     private String sopClassUID;
 
-    @Basic(optional = false)
+    //@Basic(optional = false)
     @Column(name = "inst_no")
     private String instanceNumber;
 
-    @Basic(optional = false)
-    @Column(name = "content_date")
-    private String contentDate;
+    //@Basic(optional = false)
+    @Column(name = "content_datetime", nullable=true)
+    private Date contentDateTime;
 
-    @Basic(optional = false)
-    @Column(name = "content_time")
-    private String contentTime;
-
-    @Basic(optional = false)
+    //@Basic(optional = false)
     @Column(name = "sr_complete")
     private String completionFlag;
 
-    @Basic(optional = false)
+    //@Basic(optional = false)
     @Column(name = "sr_verified")
     private String verificationFlag;
 
-    @Basic(optional = false)
+    //@Basic(optional = false)
     @Column(name = "inst_custom1")
     private String instanceCustomAttribute1;
 
-    @Basic(optional = false)
+    //@Basic(optional = false)
     @Column(name = "inst_custom2")
     private String instanceCustomAttribute2;
 
-    @Basic(optional = false)
+    //@Basic(optional = false)
     @Column(name = "inst_custom3")
     private String instanceCustomAttribute3;
 
@@ -188,13 +166,9 @@ public class Instance implements Serializable {
     @OneToMany(mappedBy = "instance", cascade = CascadeType.ALL, orphanRemoval = true)
     private Collection<ExternalRetrieveLocation> externalRetrieveLocations;
 
-    @Basic(optional = false)
+    //@Basic(optional = false)
     @Column(name = "availability")
     private Availability availability;
-
-    @Basic(optional = false)
-    @Column(name = "archived")
-    private boolean archived;
 
     @OneToOne(fetch=FetchType.LAZY, cascade=CascadeType.ALL, orphanRemoval = true, optional = false)
     @JoinColumn(name = "dicomattrs_fk")
@@ -214,17 +188,12 @@ public class Instance implements Serializable {
     @OneToMany(mappedBy = "instance", cascade = CascadeType.ALL, orphanRemoval = true)
     private Collection<ContentItem> contentItems;
 
-//    @OneToMany(mappedBy = "instance", cascade = CascadeType.ALL, orphanRemoval = false)
-//    private Collection<Location> locations;
-
     @ManyToOne(optional = false)
     @JoinColumn(name = "series_fk")
     private Series series;
 
-    @ManyToMany
-    @JoinTable(name="rel_instance_location",
-    joinColumns={@JoinColumn(name="instance_fk", referencedColumnName="pk")},
-    inverseJoinColumns={@JoinColumn(name="location_fk", referencedColumnName="pk")})
+    @OptimisticLock(excluded = true) // updates of locations should NOT increment the Instance version
+    @ManyToMany(mappedBy = "instances")
     private Collection<Location> locations;
 
     @Transient
@@ -244,11 +213,30 @@ public class Instance implements Serializable {
         Date now = new Date();
         createdTime = now;
         updatedTime = now;
+
+        // update the series, which also has an important side-effect: it will increase the version field of the series
+        // (which will in turn also increase the version field of the study).
+        // this is necessary to ensure correct calculation of derived fields for series/studies.
+        series.setUpdatedTime(now);
     }
 
     @PreUpdate
     public void onPreUpdate() {
-        updatedTime = new Date();
+        Date now = new Date();
+        updatedTime = now;
+
+        // update the series, which also has an important side-effect: it will increase the version field of the series
+        // (which will in turn also increase the version field of the study).
+        // this is necessary to ensure correct calculation of derived fields for series/studies.
+        series.setUpdatedTime(now);
+    }
+
+    @PreRemove
+    public void onPreRemove() {
+        Date now = new Date();
+        // update the series, which also has an important side-effect: it will increase the version field of the series.
+        // this is necessary to ensure correct calculation of derived fields for series/studies.
+        series.setUpdatedTime(now);
     }
 
     public AttributesBlob getAttributesBlob() {
@@ -283,12 +271,12 @@ public class Instance implements Serializable {
         return instanceNumber;
     }
 
-    public String getContentDate() {
-        return contentDate;
+    public void setContentDateTime(Date contentDateTime) {
+        this.contentDateTime = contentDateTime;
     }
 
-    public String getContentTime() {
-        return contentTime;
+    public Date getContentDateTime() {
+        return contentDateTime;
     }
 
     public String getCompletionFlag() {
@@ -323,6 +311,32 @@ public class Instance implements Serializable {
         this.retrieveAETs = StringUtils.concat(retrieveAETs, '\\');
     }
 
+    /**
+     * Adds a retrieve AET.
+     * @param aet AET to add
+     * @return Returns {@code true} if the AET was added, returns {@code false} if the AET already
+     * existed and therefore was not added.
+     */
+    public boolean addRetrieveAET(String aet) {
+        if(retrieveAETs == null) {
+            setRetrieveAETs(aet);
+        }
+        
+        String[] oldRetrieveAETs = getRetrieveAETs();
+        for(String retrieveAET : oldRetrieveAETs) {
+            if(retrieveAET.equals(aet)) {
+                return false;
+            }
+        }
+        
+        String[] newRetrieveAETs = new String[oldRetrieveAETs.length + 1];
+        System.arraycopy(oldRetrieveAETs, 0, newRetrieveAETs, 0, oldRetrieveAETs.length);
+        newRetrieveAETs[oldRetrieveAETs.length] = aet;
+        
+        setRetrieveAETs(newRetrieveAETs);
+        return true;
+    }
+
     public String getEncodedRetrieveAETs() {
         return retrieveAETs;
     }
@@ -341,14 +355,6 @@ public class Instance implements Serializable {
 
     public void setAvailability(Availability availability) {
         this.availability = availability;
-    }
-
-    public boolean isArchived() {
-        return archived;
-    }
-
-    public void setArchived(boolean archived) {
-        this.archived = archived;
     }
 
     public Code getConceptNameCode() {
@@ -384,23 +390,14 @@ public class Instance implements Serializable {
         this.contentItems = contentItems;
     }
 
+    /**
+     * @return Locations of instance. Note: This collection can NOT be used to update the locations of an instance,
+     * as Location is the managing (owning) side of the relationship. Please use {@link Location#addInstance(Instance)}
+     * instead.
+     */
     public Collection<Location> getLocations() {
         return locations;
     }
-
-    public Collection<Location> getLocations(int initSize) {
-        if (locations == null)
-            locations = new ArrayList<Location>(initSize);
-        return locations;
-    }
-
-//    public void setOtherLocations(Collection<Location> otherLocations) {
-//        this.otherLocations = otherLocations;
-//    }
-//
-//    public Collection<Location> getOtherLocations() {
-//        return otherLocations;
-//    }
 
     public void setLocations(Collection<Location> locations) {
         this.locations = locations;
@@ -431,30 +428,26 @@ public class Instance implements Serializable {
         this.externalRetrieveLocations = externalRetrieveLocations;
     }
 
-    public void setAttributes(Attributes attrs, AttributeFilter filter, FuzzyStr fuzzyStr) {
+    public void setAttributes(Attributes attrs, AttributeFilter filter, FuzzyStr fuzzyStr, String nullValue) {
         sopInstanceUID = attrs.getString(Tag.SOPInstanceUID);
         sopClassUID = attrs.getString(Tag.SOPClassUID);
-        instanceNumber = attrs.getString(Tag.InstanceNumber, "*");
-        Date dt = attrs.getDate(Tag.ContentDateAndTime);
+        instanceNumber = attrs.getString(Tag.InstanceNumber, nullValue);
+        Date dt = attrs.getDate(Tag.ContentDateAndTime, new DatePrecision(Calendar.SECOND));
         if (dt != null) {
-            contentDate = DateUtils.formatDA(null, dt);
-            contentTime = 
-                attrs.containsValue(Tag.ContentTime)
-                    ? DateUtils.formatTM(null, dt)
-                    : "*";
-        } else {
-            contentDate = "*";
-            contentTime = "*";
+            Calendar adjustedDateTimeCal = new GregorianCalendar();
+            adjustedDateTimeCal.setTime(dt);
+            adjustedDateTimeCal.set(Calendar.MILLISECOND, 0);
+            contentDateTime = adjustedDateTimeCal.getTime();
         }
-        completionFlag = attrs.getString(Tag.CompletionFlag, "*").toUpperCase();
-        verificationFlag = attrs.getString(Tag.VerificationFlag, "*").toUpperCase();
+        completionFlag = Utils.upper(attrs.getString(Tag.CompletionFlag, nullValue));
+        verificationFlag = Utils.upper(attrs.getString(Tag.VerificationFlag, nullValue));
 
         instanceCustomAttribute1 = 
-                AttributeFilter.selectStringValue(attrs, filter.getCustomAttribute1(), "*");
+                AttributeFilter.selectStringValue(attrs, filter.getCustomAttribute1(), nullValue);
         instanceCustomAttribute2 =
-                AttributeFilter.selectStringValue(attrs, filter.getCustomAttribute2(), "*");
+                AttributeFilter.selectStringValue(attrs, filter.getCustomAttribute2(), nullValue);
         instanceCustomAttribute3 =
-                AttributeFilter.selectStringValue(attrs, filter.getCustomAttribute3(), "*");
+                AttributeFilter.selectStringValue(attrs, filter.getCustomAttribute3(), nullValue);
 
         if (attributesBlob == null)
                 attributesBlob = new AttributesBlob(new Attributes(attrs, filter.getCompleteSelection(attrs)));

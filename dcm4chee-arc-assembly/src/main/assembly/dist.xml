@@ -75,6 +75,13 @@
       <outputDirectory>sql</outputDirectory>
       <lineEnding>dos</lineEnding>
     </fileSet>
+    <fileSet>
+      <directory>${project.build.directory}/dcm4chee-arr</directory>
+      <outputDirectory>jboss-cli/</outputDirectory>
+      <includes>
+        <include>arr-setup.cli</include>
+      </includes>
+    </fileSet>
   </fileSets>
   <dependencySets>
     <dependencySet>
@@ -100,6 +107,7 @@
         <include>org.dcm4che:compress-jboss-module</include>
         <include>org.dcm4che:jsch-jboss-modules</include>
         <include>org.dcm4che:jcifs-jboss-modules</include>
+        <include>org.dcm4che.dcm4chee-arc:dcm4chee-arc-jboss-modules</include>
       </includes>
       <useProjectArtifact>false</useProjectArtifact>
     </dependencySet>

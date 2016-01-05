@@ -38,36 +38,18 @@
 
 package org.dcm4chee.archive.entity;
 
-import java.io.Serializable;
-import java.util.Collection;
-import java.util.Date;
-
-import javax.persistence.Basic;
-import javax.persistence.CascadeType;
-import javax.persistence.Column;
-import javax.persistence.Entity;
-import javax.persistence.FetchType;
-import javax.persistence.GeneratedValue;
-import javax.persistence.GenerationType;
-import javax.persistence.Id;
-import javax.persistence.JoinColumn;
-import javax.persistence.JoinTable;
-import javax.persistence.ManyToMany;
-import javax.persistence.ManyToOne;
-import javax.persistence.NamedQueries;
-import javax.persistence.NamedQuery;
-import javax.persistence.OneToMany;
-import javax.persistence.OneToOne;
-import javax.persistence.PrePersist;
-import javax.persistence.PreUpdate;
-import javax.persistence.Table;
-import javax.persistence.Version;
-
 import org.dcm4che3.data.Attributes;
+import org.dcm4che3.data.DatePrecision;
 import org.dcm4che3.data.Tag;
 import org.dcm4che3.soundex.FuzzyStr;
-import org.dcm4che3.util.DateUtils;
 import org.dcm4chee.archive.conf.AttributeFilter;
+
+import javax.persistence.*;
+import java.io.Serializable;
+import java.util.Calendar;
+import java.util.Collection;
+import java.util.Date;
+import java.util.GregorianCalendar;
 
 
 /**
@@ -97,6 +79,7 @@ public class Study implements Serializable {
     private static final long serialVersionUID = -6358525535057418771L;
 
     public static final String FIND_BY_STUDY_INSTANCE_UID = "Study.findByStudyInstanceUID";
+
     public static final String FIND_BY_STUDY_INSTANCE_UID_EAGER = "Study.findByStudyInstanceUID.eager";
 
     @Id
@@ -108,58 +91,57 @@ public class Study implements Serializable {
     @Column(name = "version")
     private long version;    
 
-    @Basic(optional = false)
+    //@Basic(optional = false)
     @Column(name = "created_time", updatable = false)
     private Date createdTime;
 
-    @Basic(optional = false)
+    //@Basic(optional = false)
     @Column(name = "updated_time")
     private Date updatedTime;
 
-    @Basic(optional = false)
-    @Column(name = "study_iuid", updatable = false)
+    //@Basic(optional = false)
+    @Column(name = "study_iuid", updatable = false, unique = true)
     private String studyInstanceUID;
 
-    @Basic(optional = false)
+    //@Basic(optional = false)
     @Column(name = "study_id")
     private String studyID;
 
-    @Basic(optional = false)
-    @Column(name = "study_date")
-    private String studyDate;
-
-    @Basic(optional = false)
-    @Column(name = "study_time")
-    private String studyTime;
-
-    @Basic(optional = false)
+   @Column(name = "study_datetime", nullable = true)
+    private Date studyDateTime;
+    
+    //@Basic(optional = false)
     @Column(name = "accession_no")
     private String accessionNumber;
 
-    @Basic(optional = false)
+    //@Basic(optional = false)
     @Column(name = "study_desc")
     private String studyDescription;
 
-    @Basic(optional = false)
+    //@Basic(optional = false)
     @Column(name = "study_custom1")
     private String studyCustomAttribute1;
 
-    @Basic(optional = false)
+    //@Basic(optional = false)
     @Column(name = "study_custom2")
     private String studyCustomAttribute2;
 
-    @Basic(optional = false)
+    //@Basic(optional = false)
     @Column(name = "study_custom3")
     private String studyCustomAttribute3;
 
     @Column(name = "access_control_id")
     private String accessControlID;
 
+    //@Basic(optional = false)
+    @Column(name = "is_rejected")
+    private boolean isRejected;
+
     @OneToOne(fetch=FetchType.LAZY, cascade=CascadeType.ALL, orphanRemoval = true, optional = false)
     @JoinColumn(name = "dicomattrs_fk")
     private AttributesBlob attributesBlob;
 
-    @OneToOne(cascade=CascadeType.ALL, orphanRemoval = true)
+    @ManyToOne
     @JoinColumn(name = "ref_phys_name_fk")
     private PersonName referringPhysicianName;
 
@@ -215,20 +197,16 @@ public class Study implements Serializable {
         return updatedTime;
     }
 
+    public void setUpdatedTime(Date updatedTime) {
+        this.updatedTime = updatedTime;
+    }
+
     public String getStudyInstanceUID() {
         return studyInstanceUID;
     }
 
     public String getStudyID() {
         return studyID;
-    }
-
-    public String getStudyDate() {
-        return studyDate;
-    }
-
-    public String getStudyTime() {
-        return studyTime;
     }
 
     public String getAccessionNumber() {
@@ -246,7 +224,11 @@ public class Study implements Serializable {
     public PersonName getReferringPhysicianName() {
         return referringPhysicianName;
     }
-    
+
+    public void setReferringPhysicianName(PersonName referringPhysicianName) {
+        this.referringPhysicianName = referringPhysicianName;
+    }
+
     public AttributesBlob getAttributesBlob() {
         return attributesBlob;
     }
@@ -277,6 +259,22 @@ public class Study implements Serializable {
 
     public void setAccessControlID(String accessControlID) {
         this.accessControlID = accessControlID;
+    }
+
+    public Date getStudyDateTime() {
+        return studyDateTime;
+    }
+
+    public void setStudyDateTime(Date studyDateTime) {
+        this.studyDateTime = studyDateTime;
+    }
+
+    public boolean isRejected() {
+        return isRejected;
+    }
+
+    public void setRejected(boolean isRejected) {
+        this.isRejected = isRejected;
     }
 
     public Collection<Code> getProcedureCodes() {
@@ -316,30 +314,24 @@ public class Study implements Serializable {
         this.version = version;
     }
 
-    public void setAttributes(Attributes attrs, AttributeFilter filter, FuzzyStr fuzzyStr) {
+    public void setAttributes(Attributes attrs, AttributeFilter filter, FuzzyStr fuzzyStr, String nullValue) {
         studyInstanceUID = attrs.getString(Tag.StudyInstanceUID);
-        studyID = attrs.getString(Tag.StudyID, "*");
-        studyDescription = attrs.getString(Tag.StudyDescription, "*");
-        Date dt = attrs.getDate(Tag.StudyDateAndTime);
+        studyID = attrs.getString(Tag.StudyID, nullValue);
+        studyDescription = attrs.getString(Tag.StudyDescription, nullValue);
+        Date dt = attrs.getDate(Tag.StudyDateAndTime,new DatePrecision(Calendar.SECOND));
         if (dt != null) {
-            studyDate = DateUtils.formatDA(null, dt);
-            studyTime = attrs.containsValue(Tag.StudyTime)
-                    ? DateUtils.formatTM(null, dt)
-                    : "*";
-        } else {
-            studyDate = "*";
-            studyTime = "*";
+            Calendar adjustedDateTimeCal = new GregorianCalendar();
+            adjustedDateTimeCal.setTime(dt);
+            adjustedDateTimeCal.set(Calendar.MILLISECOND, 0);
+            studyDateTime = adjustedDateTimeCal.getTime();
         }
-        accessionNumber = attrs.getString(Tag.AccessionNumber, "*");
-        referringPhysicianName = PersonName.valueOf(
-                attrs.getString(Tag.ReferringPhysicianName), fuzzyStr,
-                referringPhysicianName);
-        studyCustomAttribute1 = 
-            AttributeFilter.selectStringValue(attrs, filter.getCustomAttribute1(), "*");
+        accessionNumber = attrs.getString(Tag.AccessionNumber, nullValue);
+        studyCustomAttribute1 =
+            AttributeFilter.selectStringValue(attrs, filter.getCustomAttribute1(), nullValue);
         studyCustomAttribute2 =
-            AttributeFilter.selectStringValue(attrs, filter.getCustomAttribute2(), "*");
+            AttributeFilter.selectStringValue(attrs, filter.getCustomAttribute2(), nullValue);
         studyCustomAttribute3 =
-            AttributeFilter.selectStringValue(attrs, filter.getCustomAttribute3(), "*");
+            AttributeFilter.selectStringValue(attrs, filter.getCustomAttribute3(), nullValue);
 
         if (attributesBlob == null)
             attributesBlob = new AttributesBlob(new Attributes(attrs, filter.getCompleteSelection(attrs)));

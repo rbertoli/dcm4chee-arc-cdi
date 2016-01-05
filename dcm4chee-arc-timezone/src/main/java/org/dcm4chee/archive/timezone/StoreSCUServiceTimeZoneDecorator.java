@@ -38,16 +38,16 @@
 
 package org.dcm4chee.archive.timezone;
 
-import java.util.Date;
-import java.util.TimeZone;
-
 import org.dcm4che3.data.Attributes;
+import org.dcm4che3.data.DatePrecision;
 import org.dcm4che3.data.Tag;
 import org.dcm4che3.data.VR;
 import org.dcm4che3.net.Status;
 import org.dcm4che3.net.service.DicomServiceException;
 import org.dcm4che3.util.DateUtils;
 import org.dcm4chee.archive.conf.ArchiveAEExtension;
+import org.dcm4chee.archive.conf.ArchiveDeviceExtension;
+import org.dcm4chee.archive.conf.TimeZoneOption;
 import org.dcm4chee.archive.dto.ArchiveInstanceLocator;
 import org.dcm4chee.archive.store.scu.CStoreSCUContext;
 import org.dcm4chee.archive.store.scu.decorators.DelegatingCStoreSCUService;
@@ -55,10 +55,13 @@ import org.dcm4chee.conf.decorators.DynamicDecorator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Calendar;
+import java.util.Date;
+import java.util.TimeZone;
+
 /**
  * @author Hesham Elbadawi <bsdreko@gmail.com>
  * @author Gunter Zeilinger <gunterze@gmail.com>
- *
  */
 @DynamicDecorator
 public class StoreSCUServiceTimeZoneDecorator extends DelegatingCStoreSCUService {
@@ -68,33 +71,37 @@ public class StoreSCUServiceTimeZoneDecorator extends DelegatingCStoreSCUService
 
     @Override
     public void coerceFileBeforeMerge(ArchiveInstanceLocator inst, Attributes attrs,
-            CStoreSCUContext context) throws DicomServiceException {
+                                      CStoreSCUContext context) throws DicomServiceException {
         getNextDecorator().coerceFileBeforeMerge(inst, attrs, context);
         ArchiveAEExtension arcAE = context.getArchiveAEExtension();
-        TimeZone archiveTimeZone = arcAE.getApplicationEntity().getDevice()
-                .getTimeZoneOfDevice();
-        if (archiveTimeZone == null) // no Timezone support configured
-            return;
+        if (arcAE.getApplicationEntity().getDevice().getDeviceExtension(ArchiveDeviceExtension.class)
+                .getTimeZoneSupport() == TimeZoneOption.STORE_QUERY_RETRIEVE) {
+            TimeZone archiveTimeZone = arcAE.getApplicationEntity().getDevice()
+                    .getTimeZoneOfDevice();
 
-        String fileTimeZoneID = ((ArchiveInstanceLocator) inst)
-                .getFileTimeZoneID();
-        if (fileTimeZoneID == null) {
-            LOG.debug("Missing Timezone information for persisted object");
-            return;
-        }
+            if (archiveTimeZone == null) // no Timezone support configured
+                return;
 
-        try {
-            TimeZone timeZone = TimeZone.getTimeZone(fileTimeZoneID);
-            if (!timeZone.hasSameRules(archiveTimeZone)) {
-                LOG.debug(
-                        "Coerce persisted object attributes from Timezone {} to Archive Timezone {}",
-                        timeZone.getID(), archiveTimeZone.getID());
-                attrs.setDefaultTimeZone(timeZone);
-                attrs.setTimezone(archiveTimeZone);
+            String fileTimeZoneID = ((ArchiveInstanceLocator) inst)
+                    .getFileTimeZoneID();
+            if (fileTimeZoneID == null) {
+                LOG.debug("Missing Timezone information for persisted object");
+                return;
             }
 
-        } catch (Exception e) {
-            throw new DicomServiceException(Status.UnableToProcess, e);
+            try {
+                TimeZone timeZone = TimeZone.getTimeZone(fileTimeZoneID);
+                if (!timeZone.hasSameRules(archiveTimeZone)) {
+                    LOG.debug(
+                            "Coerce persisted object attributes from Timezone {} to Archive Timezone {}",
+                            timeZone.getID(), archiveTimeZone.getID());
+                    attrs.setDefaultTimeZone(timeZone);
+                    attrs.setTimezone(archiveTimeZone);
+                }
+
+            } catch (Exception e) {
+                throw new DicomServiceException(Status.UnableToProcess, e);
+            }
         }
     }
 
@@ -104,43 +111,46 @@ public class StoreSCUServiceTimeZoneDecorator extends DelegatingCStoreSCUService
         getNextDecorator().coerceAttributes(attrs, context);
 
         ArchiveAEExtension arcAE = context.getArchiveAEExtension();
-        TimeZone archiveTimeZone = arcAE.getApplicationEntity().getDevice()
-                .getTimeZoneOfDevice();
-        if (archiveTimeZone == null) // no Timezone support configured
-            return;
+        if (arcAE.getApplicationEntity().getDevice().getDeviceExtension(ArchiveDeviceExtension.class)
+                .getTimeZoneSupport() == TimeZoneOption.STORE_QUERY_RETRIEVE) {
+            TimeZone archiveTimeZone = arcAE.getApplicationEntity().getDevice()
+                    .getTimeZoneOfDevice();
+            if (archiveTimeZone == null) // no Timezone support configured
+                return;
 
-        try {
-            TimeZone timeZone = context.getRemoteAE().getDevice().getTimeZoneOfDevice();
-            if (timeZone == null) {
-                LOG.debug(
-                        "{}: No Timezone configured for destination - assume Archive Timezone: {}",
-                        context.getRemoteAE().getAETitle(),
-                        archiveTimeZone.getID());
-                timeZone = archiveTimeZone;
+            try {
+                TimeZone timeZone = context.getRemoteAE().getDevice().getTimeZoneOfDevice();
+                if (timeZone == null) {
+                    LOG.debug(
+                            "{}: No Timezone configured for destination - assume Archive Timezone: {}",
+                            context.getRemoteAE().getAETitle(),
+                            archiveTimeZone.getID());
+                    timeZone = archiveTimeZone;
+                }
+                if (!timeZone.hasSameRules(archiveTimeZone)) {
+                    LOG.debug(
+                            "{}: Coerce attributes from Archive Timezone {} to destination Timezone {}",
+                            context.getRemoteAE().getAETitle(),
+                            archiveTimeZone.getID(), timeZone.getID());
+                    attrs.setDefaultTimeZone(archiveTimeZone);
+                    attrs.setTimezone(timeZone);
+                }
+                if (!attrs.containsValue(Tag.TimezoneOffsetFromUTC)) {
+                    String offsetFromUTC = DateUtils.formatTimezoneOffsetFromUTC(
+                            timeZone, dateOf(attrs));
+                    attrs.setString(Tag.TimezoneOffsetFromUTC, VR.SH, offsetFromUTC);
+                    LOG.debug(
+                            "{}: Supplement attributes with Timezone Offset From UTC {}",
+                            context.getRemoteAE().getAETitle(), offsetFromUTC);
+                }
+            } catch (Exception e) {
+                throw new DicomServiceException(Status.UnableToProcess, e);
             }
-            if (!timeZone.hasSameRules(archiveTimeZone)) {
-                LOG.debug(
-                        "{}: Coerce attributes from Archive Timezone {} to destination Timezone {}",
-                        context.getRemoteAE().getAETitle(),
-                        archiveTimeZone.getID(), timeZone.getID());
-                attrs.setDefaultTimeZone(archiveTimeZone);
-                attrs.setTimezone(timeZone);
-            }
-            if (!attrs.containsValue(Tag.TimezoneOffsetFromUTC)) {
-                String offsetFromUTC = DateUtils.formatTimezoneOffsetFromUTC(
-                        timeZone, dateOf(attrs));
-                attrs.setString(Tag.TimezoneOffsetFromUTC, VR.SH, offsetFromUTC);
-                LOG.debug(
-                        "{}: Supplement attributes with Timezone Offset From UTC {}",
-                        context.getRemoteAE().getAETitle(), offsetFromUTC);
-            }
-        } catch (Exception e) {
-            throw new DicomServiceException(Status.UnableToProcess, e);
         }
     }
 
     private Date dateOf(Attributes attrs) {
-        Date date = attrs.getDate(Tag.ContentDateAndTime);
-        return date != null ? date : attrs.getDate(Tag.StudyDateAndTime);
+        Date date = attrs.getDate(Tag.ContentDateAndTime, new DatePrecision(Calendar.SECOND));
+        return date != null ? date : attrs.getDate(Tag.StudyDateAndTime, new DatePrecision(Calendar.SECOND));
     }
 }

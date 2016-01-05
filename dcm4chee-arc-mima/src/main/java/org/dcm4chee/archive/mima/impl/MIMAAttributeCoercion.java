@@ -82,7 +82,7 @@ class MIMAAttributeCoercion {
     private static Logger LOG = LoggerFactory
             .getLogger(MIMAAttributeCoercion.class);
 
-    @PersistenceContext(unitName = "dcm4chee-arc")
+    @PersistenceContext(name = "dcm4chee-arc", unitName = "dcm4chee-arc")
     private EntityManager em;
 
     @Inject
@@ -159,7 +159,8 @@ class MIMAAttributeCoercion {
                         requestedIssuer);
             } else {
                 IDWithIssuer originalRootID = IDWithIssuer.pidOf(attrs);
-                if (coercedRootID != originalRootID) {
+                if (!coercedRootID.matches(originalRootID)) {
+                    requestedIssuer.toIssuerOfPatientID(attrs);
                     attrs.setString(Tag.PatientID, VR.LO, coercedRootID.getID());
                     LOG.info("Adjust Patient ID to {}", coercedRootID);
                 }

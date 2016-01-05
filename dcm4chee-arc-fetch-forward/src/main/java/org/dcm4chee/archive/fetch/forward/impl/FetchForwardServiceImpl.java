@@ -41,8 +41,10 @@ package org.dcm4chee.archive.fetch.forward.impl;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
@@ -54,22 +56,27 @@ import javax.ws.rs.core.Response;
 import javax.ws.rs.core.Response.Status;
 
 import org.dcm4che3.conf.api.DicomConfiguration;
+import org.dcm4che3.conf.api.IApplicationEntityCache;
 import org.dcm4che3.conf.core.api.ConfigurationException;
 import org.dcm4che3.data.UID;
 import org.dcm4che3.net.ApplicationEntity;
 import org.dcm4che3.net.Association;
 import org.dcm4che3.net.Device;
 import org.dcm4che3.net.ExternalArchiveAEExtension;
+import org.dcm4che3.net.QueryOption;
 import org.dcm4che3.net.TransferCapability;
 import org.dcm4che3.net.TransferCapability.Role;
 import org.dcm4che3.net.service.BasicCStoreSCUResp;
 import org.dcm4che3.net.web.WebServiceAEExtension;
+import org.dcm4chee.archive.conf.ArchiveAEExtension;
 import org.dcm4chee.archive.conf.ArchiveDeviceExtension;
+import org.dcm4chee.archive.conf.QueryParam;
 import org.dcm4chee.archive.dto.ArchiveInstanceLocator;
 import org.dcm4chee.archive.dto.ExternalLocationTuple;
 import org.dcm4chee.archive.fetch.forward.FetchForwardCallBack;
 import org.dcm4chee.archive.fetch.forward.FetchForwardEJB;
 import org.dcm4chee.archive.fetch.forward.FetchForwardService;
+import org.dcm4chee.archive.retrieve.RetrieveService;
 import org.dcm4chee.archive.retrieve.scu.CMoveSCUService;
 import org.dcm4chee.archive.wado.client.InstanceAvailableCallback;
 import org.dcm4chee.archive.wado.client.WadoClientService;
@@ -86,6 +93,12 @@ public class FetchForwardServiceImpl implements FetchForwardService {
     private static final Logger LOG  = LoggerFactory.getLogger(FetchForwardServiceImpl.class);
     @Inject
     private CMoveSCUService cmoveSCUService;
+
+    @Inject
+    private RetrieveService retrieveService;
+
+    @Inject
+    private IApplicationEntityCache aeCache;
 
     @Inject
     private Device device;
@@ -387,8 +400,7 @@ public class FetchForwardServiceImpl implements FetchForwardService {
         ApplicationEntity localAE = device.getApplicationEntity(storeas.getLocalAET());
         for(int current = 0; current < externallyAvailable.size(); current++) {
             if(storeas.isReadyForDataTransfer()) {
-            final ArchiveInstanceLocator externalLoc = externallyAvailable
-                    .get(current);
+            final ArchiveInstanceLocator externalLoc = externallyAvailable.get(current);
             
             if(sentInstances.contains(externalLoc.iuid))
                 continue;
@@ -414,8 +426,7 @@ public class FetchForwardServiceImpl implements FetchForwardService {
                             @Override
                             public void onInstanceAvailable(
                                     ArchiveInstanceLocator inst) {
-                                ArrayList<ArchiveInstanceLocator> matches
-                                = new ArrayList<ArchiveInstanceLocator>();
+                                ArrayList<ArchiveInstanceLocator> matches = new ArrayList<ArchiveInstanceLocator>();
                                 matches.add(inst);
                                 wadoFetchCallBack.onFetch(matches, finalResponse);
                             }
@@ -451,9 +462,9 @@ public class FetchForwardServiceImpl implements FetchForwardService {
                     }
                     //send fetched instances
                     moveFetchCallBack.onFetch(updatedLocators, finalResponse);
-                    
-                    for(ArchiveInstanceLocator loc : updatedLocators)
-                    sentInstances.add(loc.iuid);
+
+                    for (ArchiveInstanceLocator loc : updatedLocators)
+                        sentInstances.add(loc.iuid);
                     break;
                 }
             }
@@ -463,6 +474,90 @@ public class FetchForwardServiceImpl implements FetchForwardService {
         return finalResponse;
     }
 
+    @Override
+    public List<ArchiveInstanceLocator> fetchForwardFromExternalSystem(
+            String localAETitle, String srcAETitle, List<String> studyUIDs,
+            FetchForwardCallBack callBack) {
+        ApplicationEntity localAE = device.getApplicationEntity(localAETitle);
+        ApplicationEntity fetchAE;
+        try {
+            fetchAE = getFetchAE(localAE);
+        } catch (ConfigurationException e) {
+            LOG.error("Unable to get fetch AE from configuration for device {}", device);
+            return null;
+        }
+        ApplicationEntity srcAE;
+        try {
+            srcAE = aeCache.findApplicationEntity(srcAETitle);
+        } catch (ConfigurationException e) {
+            LOG.error("Unable to find source AE {} in configuration", srcAETitle);
+            return null;
+        }
+
+        for (String studyUID : studyUIDs) {
+            cmoveSCUService.moveStudy(
+                    fetchAE,
+                    studyUID,
+                    -1,
+                    null,
+                    Arrays.asList(srcAE),
+                    fetchAE.getAETitle());
+        }
+        List<ArchiveInstanceLocator> instanceLocators = toInstanceLocators(studyUIDs, localAE);
+        //send fetched instances
+        callBack.onFetch(instanceLocators, null);
+
+        return instanceLocators;
+    }
+
+    @Override
+    public BasicCStoreSCUResp fetchForwardFromExternalSystem(int allInstances,
+            BasicCStoreSCUResp finalResponse, List<String> studyUIDs,
+            Association storeas, int priority, FetchForwardCallBack callBack) {
+        ApplicationEntity localAE = device.getApplicationEntity(storeas.getLocalAET());
+        ApplicationEntity fetchAE;
+        try {
+            fetchAE = getFetchAE(localAE);
+        } catch (ConfigurationException e) {
+            LOG.error("Unable to get fetchAE from configuration for device {}", device);
+            return finalResponse;
+        }
+        ApplicationEntity srcAE;
+        try {
+            srcAE = aeCache.findApplicationEntity(storeas.getCalledAET());
+        } catch (ConfigurationException e) {
+            LOG.error("Unable to find src AE {} in configuration", storeas.getCalledAET());
+            return null;
+        }
+
+        for (String studyUID : studyUIDs) {
+            cmoveSCUService.moveStudy(
+                    fetchAE,
+                    studyUID,
+                    -1,
+                    null,
+                    Arrays.asList(srcAE),
+                    fetchAE.getAETitle());
+        }
+        List<ArchiveInstanceLocator> instanceLocators = toInstanceLocators(studyUIDs, localAE);
+        //send fetched instances
+        callBack.onFetch(instanceLocators, finalResponse);
+
+        return finalResponse;
+    }
+
+    private List<ArchiveInstanceLocator> toInstanceLocators(
+            List<String> studyUIDs, ApplicationEntity localAE) {
+        ArchiveAEExtension arcAE = localAE.getAEExtension(ArchiveAEExtension.class);
+        ArrayList<ArchiveInstanceLocator> matches = new ArrayList<>();
+        QueryParam queryParam = arcAE.getQueryParam(EnumSet.noneOf(QueryOption.class), new String[0]);
+        if (studyUIDs != null) {
+            for (String studyUID : studyUIDs) {
+                matches.addAll(retrieveService.calculateMatches(studyUID, null, null, queryParam, false));
+            }
+        }
+        return matches;
+    }
 
     private ApplicationEntity getFetchAE(ApplicationEntity localAE) throws ConfigurationException {
         return localAE
@@ -486,40 +581,36 @@ public class FetchForwardServiceImpl implements FetchForwardService {
         }
         return studyUIDs;
     }
+
     private ArrayList<ApplicationEntity> listBestExternalLocation(ArchiveInstanceLocator externalLoc, ApplicationEntity localAE) {
-        ArrayList<Device> externalDevices = new ArrayList<Device>();
         ArrayList<ApplicationEntity> externalAEs = new ArrayList<ApplicationEntity>();
-      //for ordering based on availability
-        ArrayList<ExternalLocationTuple> extLocTuples = (ArrayList<ExternalLocationTuple>) externalLoc
-                .getExternalLocators();
-        if(extLocTuples.size() > 1)
+        
+        // for ordering based on availability
+        List<ExternalLocationTuple> extLocTuples = externalLoc.getExternalLocators();
         Collections.sort(extLocTuples, fetchAvailabilityComparator());
-                        //for ordering based on priority
-        for(ExternalLocationTuple externalTuple : extLocTuples) {
-                try {
-                    externalDevices.add(config
-                            .findDevice(externalTuple.getRetrieveDeviceName()));
-                } catch (ConfigurationException e) {
-                    LOG.error("Unable to find external archive {} in configuration",
-                            externalTuple.getRetrieveDeviceName());
-                }
+        
+        List<Device> extDevices = new ArrayList<Device>();
+        // for ordering based on priority
+        for (ExternalLocationTuple extLocTuple : extLocTuples) {
+            String extRetrieveDeviceName = extLocTuple.getRetrieveDeviceName();
+            try {
+                extDevices.add(config.findDevice(extRetrieveDeviceName));
+            } catch (ConfigurationException e) {
+                LOG.error("Unable to find external archive {} in configuration", extRetrieveDeviceName);
+            }
         }
-        if(externalDevices.size() > 1)
-        Collections.sort(externalDevices, fetchDevicePriorityComparator(localAE) );
-        for(Device dev : externalDevices) {
-            TransferCapability tc = new TransferCapability("",
-                    externalLoc.cuid, Role.SCP, new String[]{
-                    UID.ImplicitVRLittleEndian, UID.ExplicitVRLittleEndian});
-            ArrayList<ApplicationEntity> deviceAEs = (ArrayList<ApplicationEntity>) 
-                    dev.getAEsSupportingTransferCapability(tc, true); 
-                    Collections.sort(deviceAEs,fetchAEPriorityComparator());
-            externalAEs.addAll(deviceAEs);
+        Collections.sort(extDevices, fetchDevicePriorityComparator(localAE));
+        
+        for (Device extDevice : extDevices) {
+            TransferCapability tc = new TransferCapability("", externalLoc.cuid, Role.SCP,
+                    new String[] { UID.ImplicitVRLittleEndian, UID.ExplicitVRLittleEndian });
+            List<ApplicationEntity> extDeviceAEs = (List<ApplicationEntity>) extDevice.getAEsSupportingTransferCapability(tc, true);
+            Collections.sort(extDeviceAEs, fetchAEPriorityComparator());
+            externalAEs.addAll(extDeviceAEs);
         }
-            
+
         return externalAEs;
     }
-
-
 
     private Comparator<? super ExternalLocationTuple> fetchAvailabilityComparator() {
         return new Comparator<ExternalLocationTuple>() {
@@ -538,7 +629,7 @@ public class FetchForwardServiceImpl implements FetchForwardService {
                         .getDeviceExtension(ArchiveDeviceExtension.class);
                 int priority1 = Integer.parseInt(archDevExt.getExternalArchivesMap().get(dev1.getDeviceName()));
                 int priority2 = Integer.parseInt(archDevExt.getExternalArchivesMap().get(dev2.getDeviceName()));
-                return priority1 < priority2 ? -1:priority1 == priority2 ? 0 : 1;
+                return priority1 - priority2;
             }
         };
     }
@@ -549,7 +640,7 @@ public class FetchForwardServiceImpl implements FetchForwardService {
             public int compare(ApplicationEntity ae1, ApplicationEntity ae2) {
                 int priority1 = ae1.getAEExtension(ExternalArchiveAEExtension.class).getAeFetchPriority();
                 int priority2 = ae2.getAEExtension(ExternalArchiveAEExtension.class).getAeFetchPriority();
-                return priority1 < priority2 ? -1:priority1 == priority2 ? 0 : 1;
+                return priority1 - priority2;
             }
         };
     }
@@ -559,11 +650,11 @@ public class FetchForwardServiceImpl implements FetchForwardService {
             String studyUID) {
         ArrayList<ApplicationEntity> preferedStudyAEs = new ArrayList<ApplicationEntity>();
         for(ArchiveInstanceLocator loc : instanceRetrieveMap.keySet()) {
-            if(loc.getStudyInstanceUID().equalsIgnoreCase(studyUID)) {
+            if(loc.getStudyInstanceUID().equals(studyUID)) {
                 for(ApplicationEntity ae : instanceRetrieveMap.get(loc)) {
                     boolean skip = false;
                     for(ApplicationEntity currentAE : preferedStudyAEs) {
-                        if(currentAE.getAETitle().equalsIgnoreCase(ae.getAETitle()))
+                        if(currentAE.getAETitle().equals(ae.getAETitle()))
                             skip = true;
                     }
                     if(!skip)
@@ -575,31 +666,39 @@ public class FetchForwardServiceImpl implements FetchForwardService {
     }
 
     @Override
-    public Response redirectRequest(ApplicationEntity redirectAE, List<ArchiveInstanceLocator> ref, String queryString) {
-        String wadoUri = null;
-        try {
-            WebServiceAEExtension wsAEExt = redirectAE.getAEExtension(WebServiceAEExtension.class);
-            wadoUri = wsAEExt.getWadoURIBaseURL();
-            return Response.temporaryRedirect(new URI(wadoUri + "?" + queryString)).build();
-        } catch (URISyntaxException e) {
-            LOG.error("Unable to redirect request to {} - Exception {}", wadoUri, e.getMessage());
-            return Response.status(Status.CONFLICT).build();
-        }        
+    public Response redirectRequest(ApplicationEntity redirectAE, String queryString) {
+        WebServiceAEExtension wsAEExt = redirectAE.getAEExtension(WebServiceAEExtension.class);
+        if (wsAEExt != null) {
+            String wadoUri = wsAEExt.getWadoURIBaseURL();
+            if (wadoUri != null) {
+                wadoUri = wadoUri + "?" + queryString;
+                try {
+                    return Response.temporaryRedirect(new URI(wadoUri)).build();
+                } catch (URISyntaxException e) {
+                    LOG.error("Unable to redirect request to {} - Exception {}", wadoUri,
+                            e.getMessage());
+                    return Response.status(Status.CONFLICT).build();
+                }
+            } 
+        }
+            
+        return null;
     }
 
     @Override
-    public ApplicationEntity getprefersForwardingAE(String localAETitle,
-            List<ArchiveInstanceLocator> externalLocations) {
+    public ApplicationEntity getPrefersForwardingAE(String localAETitle, List<ArchiveInstanceLocator> externalLocations) {
         ApplicationEntity localAE = device.getApplicationEntity(localAETitle);
-        for(ArchiveInstanceLocator loc : externalLocations) {
-            ArrayList<ApplicationEntity> externalRetrieveAes = listBestExternalLocation(loc, localAE);
-            for(ApplicationEntity ae : externalRetrieveAes) {
-                if(ae.getAEExtension(ExternalArchiveAEExtension.class).isPrefersForwarding()) {
+        for (ArchiveInstanceLocator loc : externalLocations) {
+            List<ApplicationEntity> externalRetrieveAes = listBestExternalLocation(loc, localAE);
+            for (ApplicationEntity ae : externalRetrieveAes) {
+                ExternalArchiveAEExtension extArchiveAEExtension = ae
+                        .getAEExtension(ExternalArchiveAEExtension.class);
+                if (extArchiveAEExtension != null && extArchiveAEExtension.isPrefersForwarding()) {
                     return ae;
                 }
             }
         }
-        
+
         return null;
     }
 

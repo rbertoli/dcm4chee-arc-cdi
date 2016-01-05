@@ -38,11 +38,7 @@
 
 package org.dcm4chee.archive.patient.impl;
 
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.HashSet;
-import java.util.Iterator;
-import java.util.List;
+import java.util.*;
 
 import javax.ejb.Stateless;
 import javax.inject.Inject;
@@ -53,19 +49,12 @@ import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.IDWithIssuer;
 import org.dcm4che3.data.PersonName;
 import org.dcm4che3.data.Tag;
+import org.dcm4che3.util.UIDUtils;
 import org.dcm4chee.archive.conf.AttributeFilter;
 import org.dcm4chee.archive.conf.Entity;
+import org.dcm4chee.archive.conf.MetadataUpdateStrategy;
 import org.dcm4chee.archive.conf.StoreParam;
-import org.dcm4chee.archive.entity.Issuer;
-import org.dcm4chee.archive.entity.MPPS;
-import org.dcm4chee.archive.entity.MWLItem;
-import org.dcm4chee.archive.entity.Patient;
-import org.dcm4chee.archive.entity.PatientID;
-import org.dcm4chee.archive.entity.QAttributesBlob;
-import org.dcm4chee.archive.entity.QIssuer;
-import org.dcm4chee.archive.entity.QPatient;
-import org.dcm4chee.archive.entity.QPatientID;
-import org.dcm4chee.archive.entity.Study;
+import org.dcm4chee.archive.entity.*;
 import org.dcm4chee.archive.issuer.IssuerService;
 import org.dcm4chee.archive.patient.NonUniquePatientException;
 import org.dcm4chee.archive.patient.PatientCircularMergedException;
@@ -73,6 +62,7 @@ import org.dcm4chee.archive.patient.PatientMergedException;
 import org.dcm4chee.archive.patient.PatientSelector;
 import org.dcm4chee.archive.patient.PatientSelectorFactory;
 import org.dcm4chee.archive.patient.PatientService;
+import org.dcm4chee.archive.util.ArchiveDeidentifier;
 import org.hibernate.Session;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -94,7 +84,7 @@ public class PatientServiceEJB implements PatientService {
     private static Logger LOG = LoggerFactory
             .getLogger(PatientServiceEJB.class);
 
-    @PersistenceContext(unitName = "dcm4chee-arc")
+    @PersistenceContext(name = "dcm4chee-arc", unitName = "dcm4chee-arc")
     private EntityManager em;
 
     @Inject
@@ -117,7 +107,7 @@ public class PatientServiceEJB implements PatientService {
     private Patient updateOrCreatePatientByDICOM(Attributes attrs,
             PatientSelector selector, StoreParam storeParam)
             throws PatientCircularMergedException {
-        Collection<IDWithIssuer> pids = IDWithIssuer.pidsOf(attrs);
+        Set<IDWithIssuer> pids = IDWithIssuer.pidsOf(attrs);
         Patient patient = null;
         try {
             patient = findPatientByDICOM(pids, attrs, selector);
@@ -157,31 +147,6 @@ public class PatientServiceEJB implements PatientService {
                         Patient.class).setParameter(1, familyName)
                 .getResultList();
     }
-
-    // private List<Patient> findPatientByIDs(Collection<IDWithIssuer> pids) {
-    // BooleanBuilder builder = new BooleanBuilder();
-    // Collection<BooleanExpression> eqIDs = new ArrayList<BooleanExpression>(
-    // pids.size());
-    // for (IDWithIssuer pid : pids) {
-    // BooleanExpression eqID = QPatientID.patientID.id.eq(pid.getID());
-    // if (pid.getIssuer() == null) {
-    // builder.or(eqID);
-    // } else {
-    // builder.or(ExpressionUtils.and(eqID,
-    // eqOrNoIssuer(pid.getIssuer())));
-    // eqIDs.add(eqID);
-    // }
-    // }
-    // BooleanExpression matchingIDs = new HibernateSubQuery()
-    // .from(QPatientID.patientID)
-    // .leftJoin(QPatientID.patientID.issuer, QIssuer.issuer)
-    // .where(ExpressionUtils.and(
-    // QPatientID.patientID.patient.eq(QPatient.patient),
-    // builder)).exists();
-    // Session session = em.unwrap(Session.class);
-    // return new HibernateQuery(session).from(QPatient.patient)
-    // .where(matchingIDs).list(QPatient.patient);
-    // }
 
     private List<Patient> findPatientByIDs(Collection<IDWithIssuer> pids) {
         BooleanBuilder builder = new BooleanBuilder();
@@ -234,8 +199,8 @@ public class PatientServiceEJB implements PatientService {
 
     private Predicate eqOrNoUniversalEntityID(String uid, String uidType) {
         return ExpressionUtils.or(ExpressionUtils.and(
-                QIssuer.issuer.universalEntityID.eq(uid),
-                QIssuer.issuer.universalEntityIDType.eq(uidType)),
+                        QIssuer.issuer.universalEntityID.eq(uid),
+                        QIssuer.issuer.universalEntityIDType.eq(uidType)),
                 QIssuer.issuer.universalEntityID.isNull());
     }
 
@@ -257,12 +222,18 @@ public class PatientServiceEJB implements PatientService {
         return patient;
     }
 
-    private Patient createPatient(Collection<IDWithIssuer> pids,
+    private Patient createPatient(Set<IDWithIssuer> pids,
             Attributes attrs, StoreParam storeParam) {
         Patient patient = new Patient();
         patient.setAttributes(attrs,
                 storeParam.getAttributeFilter(Entity.Patient),
-                storeParam.getFuzzyStr());
+                storeParam.getFuzzyStr(), storeParam.getNullValueForQueryFields());
+
+        if (pids.isEmpty() && storeParam.getIssuerOfPatientID()!=null) {
+            pids= new HashSet<IDWithIssuer>();
+            pids.add(new IDWithIssuer(UIDUtils.createUID(),storeParam.getIssuerOfPatientID()));
+        }
+
         patient.setNoPatientID(pids.isEmpty());
         patient.setPatientIDs(createPatientIDs(pids, patient,
                 storeParam.isDeIdentifyLogs()));
@@ -311,9 +282,14 @@ public class PatientServiceEJB implements PatientService {
         }
         Attributes patientAttrs = patient.getAttributes();
         AttributeFilter filter = storeParam.getAttributeFilter(Entity.Patient);
-        if (patientAttrs.mergeSelected(attrs, filter.getCompleteSelection(attrs))) {
-            patient.setAttributes(patientAttrs, filter,
-                    storeParam.getFuzzyStr());
+        Attributes modified = new Attributes();
+        boolean deident = storeParam.isDeIdentifyLogs();
+        if (Utils.updateAttributes(patientAttrs, attrs, modified , filter, MetadataUpdateStrategy.COERCE_MERGE)) {
+            LOG.info("[{}]: Update {}:\n{}\nmodified:\n{}", this.getClass().getName(),
+                    patient.toString(deident),
+                    deident ? patientAttrs.toString(ArchiveDeidentifier.DEFAULT) : patientAttrs,
+                    deident ? modified.toString(ArchiveDeidentifier.DEFAULT) : modified);
+            patient.setAttributes(patientAttrs, filter, storeParam.getFuzzyStr(), storeParam.getNullValueForQueryFields());
         }
     }
 
@@ -376,10 +352,8 @@ public class PatientServiceEJB implements PatientService {
         }
         Attributes patientAttrs = patient.getAttributes();
         AttributeFilter filter = storeParam.getAttributeFilter(Entity.Patient);
-        if (patientAttrs.updateSelected(attrs, null, filter.getCompleteSelection(attrs))) {
-            patient.setAttributes(patientAttrs, filter,
-                    storeParam.getFuzzyStr());
-        }
+        if (Utils.updateAttributes(patientAttrs, attrs, null, filter, MetadataUpdateStrategy.COERCE_MERGE))
+            patient.setAttributes(patientAttrs, filter, storeParam.getFuzzyStr(), storeParam.getNullValueForQueryFields());
     }
 
     @Override
@@ -389,13 +363,13 @@ public class PatientServiceEJB implements PatientService {
         // TODO make PatientSelector configurable
         PatientSelector selector = PatientSelectorFactory
                 .createSelector(storeParam);
-        Collection<IDWithIssuer> pids = IDWithIssuer.pidsOf(attrs);
+        Set<IDWithIssuer> pids = IDWithIssuer.pidsOf(attrs);
         return updateOrCreatePatientByHL7(attrs, storeParam, selector, pids);
     }
 
     private Patient updateOrCreatePatientByHL7(Attributes attrs,
             StoreParam storeParam, PatientSelector selector,
-            Collection<IDWithIssuer> pids) throws NonUniquePatientException,
+            Set<IDWithIssuer> pids) throws NonUniquePatientException,
             PatientMergedException {
         Patient patient = selector.select(findPatientByIDs(pids), attrs, pids);
         if (patient == null)
@@ -414,8 +388,8 @@ public class PatientServiceEJB implements PatientService {
             PatientMergedException {
         PatientSelector selector = PatientSelectorFactory
                 .createSelector(storeParam);
-        Collection<IDWithIssuer> pids = IDWithIssuer.pidsOf(attrs);
-        Collection<IDWithIssuer> priorPIDs = IDWithIssuer.pidsOf(priorAttrs);
+        Set<IDWithIssuer> pids = IDWithIssuer.pidsOf(attrs);
+        Set<IDWithIssuer>  priorPIDs = IDWithIssuer.pidsOf(priorAttrs);
         Patient prior = updateOrCreatePatientByHL7(priorAttrs, storeParam,
                 selector, priorPIDs);
         Patient pat = updateOrCreatePatientByHL7(attrs, storeParam, selector,
@@ -671,10 +645,8 @@ public class PatientServiceEJB implements PatientService {
         // set blob data
         Attributes patientAttrs = patient.getAttributes();
         AttributeFilter filter = storeParam.getAttributeFilter(Entity.Patient);
-        if (patientAttrs.updateSelected(otherPatientAttrs, null,
-                filter.getCompleteSelection(otherPatientAttrs))) {
-            patient.setAttributes(patientAttrs, filter,
-                    storeParam.getFuzzyStr());
+        if (Utils.updateAttributes(patientAttrs, otherPatientAttrs, null, filter, MetadataUpdateStrategy.COERCE_MERGE)) {
+            patient.setAttributes(patientAttrs, filter, storeParam.getFuzzyStr(), storeParam.getNullValueForQueryFields());
             em.flush();
             LOG.info("Update ID {} with {} ", pids, otherPids);
         }

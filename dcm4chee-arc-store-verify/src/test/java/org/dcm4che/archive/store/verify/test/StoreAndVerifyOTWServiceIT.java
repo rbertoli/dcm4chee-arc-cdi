@@ -72,7 +72,6 @@ import org.dcm4chee.archive.store.verify.StoreVerifyEJB;
 import org.dcm4chee.archive.store.verify.StoreVerifyService;
 import org.dcm4chee.archive.store.verify.impl.StoreVerifyServiceImpl;
 import org.dcm4chee.archive.stow.client.StowContext;
-import org.dcm4chee.storage.conf.Availability;
 import org.dcm4chee.storage.conf.StorageDeviceExtension;
 import org.dcm4chee.storage.conf.StorageSystem;
 import org.jboss.arquillian.container.test.api.Deployment;
@@ -83,7 +82,6 @@ import org.jboss.shrinkwrap.api.exporter.ZipExporter;
 import org.jboss.shrinkwrap.api.spec.JavaArchive;
 import org.jboss.shrinkwrap.api.spec.WebArchive;
 import org.jboss.shrinkwrap.resolver.api.maven.Maven;
-import org.dcm4che.archive.store.verify.test.ParamFactory;
 import org.junit.Before;
 import org.junit.FixMethodOrder;
 import org.junit.Test;
@@ -109,9 +107,9 @@ public class StoreAndVerifyOTWServiceIT {
         "DELETE FROM study", "DELETE FROM rel_linked_patient_id",
         "DELETE FROM patient_id", "DELETE FROM id_issuer",
         "DELETE FROM patient", "DELETE FROM soundex_code",
-        "DELETE FROM person_name", "DELETE FROM qc_instance_history",
-        "DELETE FROM qc_series_history", "DELETE FROM qc_study_history",
-        "DELETE FROM qc_action_history", "DELETE FROM qc_update_history",
+        "DELETE FROM person_name", "DELETE FROM instance_history",
+        "DELETE FROM series_history", "DELETE FROM study_history",
+        "DELETE FROM action_history", "DELETE FROM update_history",
         "DELETE FROM code", "DELETE FROM dicomattrs" };
 
         @Inject
@@ -123,7 +121,7 @@ public class StoreAndVerifyOTWServiceIT {
         @Inject
         private Device device;
 
-        @PersistenceContext(name = "dcm4chee-arc")
+        @PersistenceContext(name = "dcm4chee-arc", unitName="dcm4chee-arc")
         EntityManager em;
 
         @Inject
@@ -178,7 +176,7 @@ public class StoreAndVerifyOTWServiceIT {
             ArrayList<ArchiveInstanceLocator> locators = 
                     new ArrayList<ArchiveInstanceLocator>();
             locators.add(locateInstance(sopUID));
-            storeRememberService.store(ctx, locators);
+            storeRememberService.scheduleStore(null, ctx, locators);
             //test assertions in the observer
         }
 
@@ -231,13 +229,11 @@ public class StoreAndVerifyOTWServiceIT {
                 session.setSource(new GenericParticipant("", "storeandremembertest"));
                 session.setRemoteAET("none");
                 session.setArchiveAEExtension(arcAEExt);
-                storeService.initStorageSystem(session);
-                storeService.initSpoolDirectory(session);
+                storeService.init(session);
                 StoreContext context = storeService.createStoreContext(session);
                 Attributes fmi = new Attributes();
                 fmi.setString(Tag.TransferSyntaxUID, VR.UI, "1.2.840.10008.1.2");
                 storeService.writeSpoolFile(context, fmi, load(updateResource));
-                storeService.parseSpoolFile(context);
                 storeService.store(context);
                 utx.commit();
                 em.clear();

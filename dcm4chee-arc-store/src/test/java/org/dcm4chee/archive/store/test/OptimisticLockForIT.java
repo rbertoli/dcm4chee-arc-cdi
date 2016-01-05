@@ -52,7 +52,6 @@ import javax.transaction.NotSupportedException;
 import javax.transaction.RollbackException;
 import javax.transaction.SystemException;
 
-import org.apache.log4j.Logger;
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.io.SAXReader;
 import org.dcm4che3.net.Device;
@@ -72,11 +71,12 @@ import org.jboss.arquillian.junit.Arquillian;
 import org.jboss.shrinkwrap.api.ShrinkWrap;
 import org.jboss.shrinkwrap.api.spec.JavaArchive;
 import org.jboss.shrinkwrap.api.spec.WebArchive;
-import org.jboss.shrinkwrap.resolver.api.maven.Maven;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * @author Gunter Zeilinger <gunterze@gmail.com>
@@ -87,8 +87,7 @@ public class OptimisticLockForIT extends BaseStoreIT {
 
     private static final String SOURCE_AET = "SOURCE_AET";
     private static final String[] RETRIEVE_AETS = { "RETRIEVE_AET" };
-    private static final Logger log = Logger
-            .getLogger(OptimisticLockForIT.class);
+    private static final Logger log = LoggerFactory.getLogger(OptimisticLockForIT.class);
 
     private final int SEMAPHORE_WAIT = 10;
     private final boolean[] optimisticLockExceptionWasThrown = new boolean[] { false };
@@ -132,14 +131,8 @@ public class OptimisticLockForIT extends BaseStoreIT {
     @Deployment
     public static WebArchive createDeployment() {
         WebArchive war = ShrinkWrap.create(WebArchive.class, "test.war");
-        JavaArchive[] archs = Maven.resolver().loadPomFromFile("testpom.xml")
-                .importRuntimeAndTestDependencies().resolve()
-                .withoutTransitivity().as(JavaArchive.class);
-        for (JavaArchive a : archs) {
-            a.addAsManifestResource(new File(
-                    "src/test/resources/testdata/beans.xml"), "beans.xml");
-            war.addAsLibrary(a);
-        }
+        ITHelper.addDefaultDependenciesToWebArchive(war, new File(
+                    "src/test/resources/testdata/beans.xml"));
 
         JavaArchive jar = ShrinkWrap.create(JavaArchive.class, "test.jar");
         jar.addClass(BaseStoreIT.class);
@@ -200,6 +193,7 @@ public class OptimisticLockForIT extends BaseStoreIT {
         StoreSession session = storeService.createStoreSession(storeService);
         session.setStoreParam(storeParam);
         StorageSystem storageSystem = new StorageSystem();
+        storageSystem.setStorageSystemID("test_storage_system");
         StorageSystemGroup grp = new StorageSystemGroup();
         grp.setGroupID("test_grp");
         grp.addStorageSystem(storageSystem);
@@ -211,7 +205,7 @@ public class OptimisticLockForIT extends BaseStoreIT {
                 .getAEExtension(ArchiveAEExtension.class));
 
         StoreContext storeContext = storeService.createStoreContext(session);
-        storeContext.setAttributes(load(instance));
+        storeContext.setAttributesForDatabase(load(instance));
 
         return storeContext;
 

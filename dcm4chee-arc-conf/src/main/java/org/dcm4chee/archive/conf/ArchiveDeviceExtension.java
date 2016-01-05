@@ -38,22 +38,22 @@
 
 package org.dcm4chee.archive.conf;
 
-import java.util.EnumMap;
-import java.util.Map;
-import java.util.TreeMap;
-
-import javax.xml.transform.Templates;
-import javax.xml.transform.TransformerConfigurationException;
-
+import org.dcm4che3.conf.api.extensions.ReconfiguringIterator;
 import org.dcm4che3.conf.core.api.ConfigurableClass;
 import org.dcm4che3.conf.core.api.ConfigurableProperty;
+import org.dcm4che3.conf.core.api.ConfigurableProperty.ConfigurablePropertyType;
 import org.dcm4che3.conf.core.api.LDAP;
-import org.dcm4che3.conf.api.extensions.ReconfiguringIterator;
 import org.dcm4che3.data.Code;
 import org.dcm4che3.io.TemplatesCache;
+import org.dcm4che3.net.ApplicationEntity;
+import org.dcm4che3.net.Device;
 import org.dcm4che3.net.DeviceExtension;
 import org.dcm4che3.soundex.FuzzyStr;
 import org.dcm4che3.util.StringUtils;
+
+import javax.xml.transform.Templates;
+import javax.xml.transform.TransformerConfigurationException;
+import java.util.*;
 
 
 /**
@@ -64,6 +64,18 @@ import org.dcm4che3.util.StringUtils;
 public class ArchiveDeviceExtension extends DeviceExtension {
 
     private static final long serialVersionUID = -3611223780276386740L;
+
+    @ConfigurableProperty(type = ConfigurablePropertyType.OptimisticLockingHash)
+    private String olockHash;
+
+    @ConfigurableProperty(name = "dcmVisibleImageClasses")
+    private String[] visibleImageSRClasses = {};
+    
+    @ConfigurableProperty(name = "dcmNonVisibleImageClasses")
+    private String[] nonVisibleImageSRClasses = {};
+    
+    @ConfigurableProperty(name = "dcmUseWhitelistOfVisibleImageSRClasses", defaultValue = "true")
+    private boolean useWhitelistOfVisibleImageSRClasses;
 
     @ConfigurableProperty(name = "dcmDisabledDecorators")
     private String[] disabledDecorators = {};
@@ -91,19 +103,29 @@ public class ArchiveDeviceExtension extends DeviceExtension {
     @ConfigurableProperty(name = "dcmDeIdentifyLogs", defaultValue = "false")
     private boolean deIdentifyLogs;
 
-    @ConfigurableProperty(name = "dcmUpdateDbRetries", defaultValue = "1")
-    private int updateDbRetries = 1;
+    @ConfigurableProperty(name = "dcmUpdateDbRetries", defaultValue = "3")
+    private int updateDbRetries = 3;
+
+    @ConfigurableProperty(name = "dcmUpdateDbDelay", defaultValue = "1000")
+    private int updateDbDelay = 1000;
+
+    @ConfigurableProperty(name = "dcmDBTimeZone")
+    private TimeZone dataBaseTimeZone = TimeZone.getTimeZone("GMT+00:00");
+
+    @ConfigurableProperty(name = "dcmTimeZoneSupport", defaultValue = "DISABLED")
+    private TimeZoneOption timeZoneSupport = TimeZoneOption.DISABLED;
 
     @LDAP(noContainerNode = true)
     @ConfigurableProperty(name = "dcmPrivateDerivedFields")
-    private PrivateDerivedFields privateDerivedFields = new PrivateDerivedFields();
+    private final PrivateDerivedFields privateDerivedFields = new PrivateDerivedFields();
 
     @LDAP(
             distinguishingField = "dicomHostName",
             mapValueAttribute = "dicomAETitle",
             mapEntryObjectClass= "dcmHostNameAEEntry"
     )
-    @ConfigurableProperty(name = "HostNameAETitleMap")
+    @ConfigurableProperty(name = "HostNameAETitleMap",
+        description = "Maps remote hostnames/IP addresses to AE titles. Used for determining the source AE within Web services (STOW/QIDO/...). \"*\" can be used for a default/fallback mapping.")
     private final Map<String, String> hostNameToAETitleMap = new TreeMap<String, String>(String.CASE_INSENSITIVE_ORDER);
 
     @LDAP(
@@ -128,8 +150,14 @@ public class ArchiveDeviceExtension extends DeviceExtension {
     @ConfigurableProperty(name = "dcmRejectedObjectsCleanUpMaxNumberOfDeletes")
     private int rejectedObjectsCleanUpMaxNumberOfDeletes;
 
-    @ConfigurableProperty(name = "dcmMppsEmulationPollInterval", defaultValue = "0")
+    @ConfigurableProperty(name = "dcmMppsEmulationPollInterval",
+            description = "Interval in seconds that should be used to poll for finished study updates (and therefore mpps emulation candidates)" +
+                    "If set to 0, disables polling.",
+            defaultValue = "0")
     private int mppsEmulationPollInterval;
+
+    @ConfigurableProperty(name = "dcmDeletionServicePollInterval", defaultValue = "0")
+    private int deletionServicePollInterval;
 
     @ConfigurableProperty(name = "dcmArchivingSchedulerPollInterval", defaultValue = "0")
     private int archivingSchedulerPollInterval;
@@ -155,11 +183,95 @@ public class ArchiveDeviceExtension extends DeviceExtension {
     @ConfigurableProperty(name = "dcmFetchAETitle")
     private String fetchAETitle = "DCM4CHEE_FETCH";
 
-    @ConfigurableProperty(name = "dcmDefaultAETitle")
-    private String defaultAETitle = "DCM4CHEE";
+    @ConfigurableProperty(name = "dcmPriorsCacheMaxResolvedPathEntries", defaultValue = "100")
+    private int priorsCacheMaxResolvedPathEntries = 100;
+
+    @ConfigurableProperty(name = "dcmPriorsCacheDeleteDuplicateLocationsDelay", defaultValue = "60")
+    private int priorsCacheDeleteDuplicateLocationsDelay = 60;
+
+    @ConfigurableProperty(name = "dcmPriorsCacheClearMaxLocationsPerDelete", defaultValue = "1000")
+    private int priorsCacheClearMaxLocationsPerDelete = 1000;
+
+    @ConfigurableProperty(name = "dcmUseNullForEmptyQueryFields", defaultValue = "true")
+    private boolean useNullForEmptyQueryFields = true;
+
+    @LDAP(noContainerNode=true)
+    @ConfigurableProperty(name = "dcmDeletionRules")
+    private final DeletionRules deletionRules = new DeletionRules();
+
+    @ConfigurableProperty(name = "dcmMaxDeleteServiceRetries", defaultValue = "0")
+    private int maxDeleteServiceRetries;
+
+    @ConfigurableProperty(name = "dcmDeleteServiceAllowedInterval")
+    private String deleteServiceAllowedInterval;
+
+    @ConfigurableProperty(name = "dcmDataVolumePerDayCalculationRange", defaultValue = "23-0")
+    private String dataVolumePerDayCalculationRange = "23-0";
+
+    @ConfigurableProperty(name = "dcmDataVolumePerDayAverageOnNDays", defaultValue = "1")
+    private int dataVolumePerDayAverageOnNDays = 1;
+
+    @LDAP(noContainerNode=true)
+    @ConfigurableProperty(
+            label = "MPPS emulation and Study update rules",
+            name = "dcmMPPSEmulationRules")
+    private final List<MPPSEmulationAndStudyUpdateRule> mppsEmulationAndStudyUpdateRules = new ArrayList<MPPSEmulationAndStudyUpdateRule>();
+
+    @ConfigurableProperty(name = "dcmIgnoreSeriesStudyMissmatchErrorsAETs",
+    		description="List of Application Entities which will not get a C-STORE rejected, if a Series/Study mismatch is detected",
+    		collectionOfReferences=true)
+    private Collection<ApplicationEntity> ignoreSeriesStudyMissmatchErrorsAETs = new ArrayList<ApplicationEntity>();
+
+    @ConfigurableProperty
+    private WeightWatcherConfiguration weightWatcherConfiguration = new WeightWatcherConfiguration();
 
     private transient FuzzyStr fuzzyStr;
     private transient TemplatesCache templatesCache;
+
+    public String getOlockHash() {
+        return olockHash;
+    }
+
+    public void setOlockHash(String olockHash) {
+        this.olockHash = olockHash;
+    }
+
+    public List<MPPSEmulationAndStudyUpdateRule> getMppsEmulationAndStudyUpdateRules() {
+        return mppsEmulationAndStudyUpdateRules;
+    }
+
+    private final Map<String, MPPSEmulationAndStudyUpdateRule> mppsEmulationRuleMap =
+            new HashMap<String, MPPSEmulationAndStudyUpdateRule>();
+
+    public void setMppsEmulationAndStudyUpdateRules(List<MPPSEmulationAndStudyUpdateRule> rules) {
+        // exception
+        if (rules == mppsEmulationAndStudyUpdateRules) return;
+
+        this.mppsEmulationAndStudyUpdateRules.clear();
+        this.mppsEmulationRuleMap.clear();
+        for (MPPSEmulationAndStudyUpdateRule rule : rules) {
+            addMppsEmulationRule(rule);
+        }
+    }
+
+    public MPPSEmulationAndStudyUpdateRule getMppsEmulationRule(String sourceAET) {
+        return mppsEmulationRuleMap.get(sourceAET) != null
+                ? mppsEmulationRuleMap.get(sourceAET)
+                : (mppsEmulationRuleMap.get("*") != null ? mppsEmulationRuleMap.get("*") : null);
+    }
+
+
+    public void addMppsEmulationRule(MPPSEmulationAndStudyUpdateRule rule) {
+        mppsEmulationAndStudyUpdateRules.add(rule);
+
+        // populate rules by source AE for easy lookup
+        for (ApplicationEntity applicationEntity : rule.getSourceAEs())
+            mppsEmulationRuleMap.put(applicationEntity.getAETitle(), rule);
+
+        // if no AEs specified - consider it a default rule
+        if (rule.getSourceAEs().isEmpty())
+            mppsEmulationRuleMap.put("*", rule);
+    }
 
     public boolean isHostnameAEResolution() {
         return hostnameAEResolution;
@@ -189,6 +301,14 @@ public class ArchiveDeviceExtension extends DeviceExtension {
             this.externalArchivesMap.putAll(externalArchivesMap);
     }
 
+    public TimeZoneOption getTimeZoneSupport() {
+        return timeZoneSupport;
+    }
+
+    public void setTimeZoneSupport(TimeZoneOption timeZoneSupport) {
+        this.timeZoneSupport = timeZoneSupport;
+    }
+
     public Code getIncorrectWorklistEntrySelectedCode() {
         return incorrectWorklistEntrySelectedCode;
     }
@@ -214,6 +334,14 @@ public class ArchiveDeviceExtension extends DeviceExtension {
         this.fuzzyAlgorithmClass = fuzzyAlgorithmClass;
     }
 
+    public TimeZone getDataBaseTimeZone() {
+        return dataBaseTimeZone;
+    }
+
+    public void setDataBaseTimeZone(TimeZone dataBaseTimeZone) {
+        this.dataBaseTimeZone = dataBaseTimeZone;
+    }
+
     public boolean isDeIdentifyLogs() {
         return deIdentifyLogs;
     }
@@ -228,6 +356,14 @@ public class ArchiveDeviceExtension extends DeviceExtension {
 
     public void setUpdateDbRetries(int updateDbRetries) {
         this.updateDbRetries = updateDbRetries;
+    }
+
+    public int getUpdateDbDelay() {
+        return updateDbDelay;
+    }
+
+    public void setUpdateDbDelay(int updateDbDelay) {
+        this.updateDbDelay = updateDbDelay;
     }
 
     public FuzzyStr getFuzzyStr() {
@@ -414,6 +550,8 @@ public class ArchiveDeviceExtension extends DeviceExtension {
         storeParam.setFuzzyStr(getFuzzyStr());
         storeParam.setAttributeFilters(attributeFilters);
         storeParam.setDeIdentifyLogs(isDeIdentifyLogs());
+        storeParam.setNullValueForQueryFields(getNullValueForQueryFields());
+        storeParam.setIssuerOfPatientID(getDevice().getIssuerOfPatientID());
         return storeParam;
         
     }
@@ -423,6 +561,7 @@ public class ArchiveDeviceExtension extends DeviceExtension {
         queryParam.setFuzzyStr(getFuzzyStr());
         queryParam.setAttributeFilters(attributeFilters);
         queryParam.setDeIdentifyLogs(isDeIdentifyLogs());
+        queryParam.setNullValueForQueryFields(getNullValueForQueryFields());
         return queryParam;
     }
 
@@ -452,11 +591,171 @@ public class ArchiveDeviceExtension extends DeviceExtension {
         return privateDerivedFields.remove(tag);
     }
 
+    /**
+     * The property was moved to device level and converted to AE reference. Please access it directly through {@link Device#getDefaultAE()}
+     */
+    @Deprecated
     public String getDefaultAETitle() {
-        return defaultAETitle;
+        return getDevice().getDefaultAE() == null ? "" : getDevice().getDefaultAE().getAETitle();
     }
 
-    public void setDefaultAETitle(String defaultAETitle) {
-        this.defaultAETitle = defaultAETitle;
+    public int getPriorsCacheMaxResolvedPathEntries() {
+        return priorsCacheMaxResolvedPathEntries;
+    }
+
+    public void setPriorsCacheMaxResolvedPathEntries(
+            int priorsCacheMaxResolvedPathEntries) {
+        this.priorsCacheMaxResolvedPathEntries = priorsCacheMaxResolvedPathEntries;
+    }
+
+    public int getPriorsCacheDeleteDuplicateLocationsDelay() {
+        return priorsCacheDeleteDuplicateLocationsDelay;
+    }
+
+    public void setPriorsCacheDeleteDuplicateLocationsDelay(
+            int priorsCacheDeleteDuplicateLocationsDelay) {
+        this.priorsCacheDeleteDuplicateLocationsDelay = priorsCacheDeleteDuplicateLocationsDelay;
+    }
+
+    public int getPriorsCacheClearMaxLocationsPerDelete() {
+        return priorsCacheClearMaxLocationsPerDelete;
+    }
+
+    public void setPriorsCacheClearMaxLocationsPerDelete(
+            int priorsCacheClearMaxLocationsPerDelete) {
+        this.priorsCacheClearMaxLocationsPerDelete = priorsCacheClearMaxLocationsPerDelete;
+    }
+
+    public int getDeletionServicePollInterval() {
+        return deletionServicePollInterval;
+    }
+
+    public void setDeletionServicePollInterval(int deletionServicePollInterval) {
+        this.deletionServicePollInterval = deletionServicePollInterval;
+    }
+    
+    public String[] getVisibleImageSRClasses() {
+        return visibleImageSRClasses;
+    }
+
+    public void setVisibleImageSRClasses(String[] visibleImageSRClasses) {
+        this.visibleImageSRClasses = visibleImageSRClasses;
+    }
+    
+    public String[] getNonVisibleImageSRClasses() {
+        return nonVisibleImageSRClasses;
+    }
+
+    public void setNonVisibleImageSRClasses(String[] nonVisibleImageSRClasses) {
+        this.nonVisibleImageSRClasses = nonVisibleImageSRClasses;
+    }
+    
+    public boolean getUseWhitelistOfVisibleImageSRClasses() {
+        return useWhitelistOfVisibleImageSRClasses;
+    }
+
+    public void setUseWhitelistOfVisibleImageSRClasses(boolean useWhitelistOfVisibleImageSRClasses) {
+        this.useWhitelistOfVisibleImageSRClasses = useWhitelistOfVisibleImageSRClasses;
+    }
+
+
+    public boolean isVisibleSOPClass(String sopClassUID) {
+        if (getUseWhitelistOfVisibleImageSRClasses()) {
+            return doesImageSRListContainSOPClass(sopClassUID, getVisibleImageSRClasses());
+        } else {
+            return !doesImageSRListContainSOPClass(sopClassUID, getNonVisibleImageSRClasses());
+        }
+    }
+
+    public boolean isUseNullForEmptyQueryFields() {
+        return useNullForEmptyQueryFields;
+    }
+
+    public String getNullValueForQueryFields() {
+        return isUseNullForEmptyQueryFields() ? null : "*";
+    }
+
+
+    public void setUseNullForEmptyQueryFields(boolean useNullForEmptyQueryFields) {
+        this.useNullForEmptyQueryFields = useNullForEmptyQueryFields;
+    }
+
+    private boolean doesImageSRListContainSOPClass(String sopClassUID, String[] arrayOfSOPClasses) {
+        return arrayOfSOPClasses != null && arrayOfSOPClasses.length>0 &&
+                Arrays.asList(arrayOfSOPClasses).contains(sopClassUID);
+    }
+
+    public DeletionRules getDeletionRules() {
+        return deletionRules;
+    }
+
+    public void addDeletionRule(DeletionRule rule) {
+        deletionRules.add(rule);
+    }
+
+    public void setDeletionRules(DeletionRules rules) {
+        deletionRules.clear();
+        if (rules != null)
+            deletionRules.add(rules);
+    }
+
+    public boolean removeDeletionRule(DeletionRule rule) {
+        return deletionRules.remove(rule);
+    }
+
+    public int getMaxDeleteServiceRetries() {
+        return maxDeleteServiceRetries;
+    }
+
+    public void setMaxDeleteServiceRetries(int maxDeleteServiceRetries) {
+        this.maxDeleteServiceRetries = maxDeleteServiceRetries;
+    }
+
+    public String getDeleteServiceAllowedInterval() {
+        return deleteServiceAllowedInterval;
+    }
+
+    public void setDeleteServiceAllowedInterval(String deleteServiceAllowedInterval) {
+        this.deleteServiceAllowedInterval = deleteServiceAllowedInterval;
+    }
+
+    public int getDataVolumePerDayAverageOnNDays() {
+        return dataVolumePerDayAverageOnNDays;
+    }
+
+    public void setDataVolumePerDayAverageOnNDays(int dataVolumePerDayAverageOnNDays) {
+        this.dataVolumePerDayAverageOnNDays = dataVolumePerDayAverageOnNDays;
+    }
+
+    public String getDataVolumePerDayCalculationRange() {
+        return dataVolumePerDayCalculationRange;
+    }
+
+    public void setDataVolumePerDayCalculationRange(
+            String dataVolumePerDayCalculationRange) {
+        this.dataVolumePerDayCalculationRange = dataVolumePerDayCalculationRange;
+    }
+
+	public Collection<ApplicationEntity> getIgnoreSeriesStudyMissmatchErrorsAETs() {
+		return ignoreSeriesStudyMissmatchErrorsAETs;
+	}
+
+	public void setIgnoreSeriesStudyMissmatchErrorsAETs(Collection<ApplicationEntity> ignoreSeriesStudyMissmatchErrorsAETs) {
+		this.ignoreSeriesStudyMissmatchErrorsAETs = ignoreSeriesStudyMissmatchErrorsAETs;
+	}
+	
+	public void addIgnoreSeriesStudyMissmatchErrorsAET(ApplicationEntity ae) {
+		this.ignoreSeriesStudyMissmatchErrorsAETs.add(ae);
+	}
+	public boolean removeIgnoreSeriesStudyMissmatchErrorsAET(ApplicationEntity ae) {
+		return this.ignoreSeriesStudyMissmatchErrorsAETs.remove(ae);
+	}
+
+    public WeightWatcherConfiguration getWeightWatcherConfiguration() {
+        return weightWatcherConfiguration;
+    }
+
+    public void setWeightWatcherConfiguration(WeightWatcherConfiguration weightWatcherConfiguration) {
+        this.weightWatcherConfiguration = weightWatcherConfiguration;
     }
 }

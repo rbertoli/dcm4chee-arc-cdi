@@ -80,10 +80,7 @@ import org.dcm4chee.archive.entity.Series;
 import org.dcm4chee.archive.entity.Study;
 import org.dcm4chee.archive.entity.Utils;
 import org.dcm4chee.archive.ian.scu.IANSCU;
-//import org.dcm4chee.archive.iocm.RejectionEvent;
-//import org.dcm4chee.archive.iocm.RejectionType;
-import org.dcm4chee.archive.mpps.event.MPPSEvent;
-import org.dcm4chee.archive.mpps.event.MPPSFinal;
+import org.dcm4chee.archive.mpps.MPPSContext;
 import org.dcm4chee.archive.store.StoreContext;
 import org.dcm4chee.archive.store.StoreSession;
 import org.slf4j.Logger;
@@ -92,22 +89,24 @@ import org.slf4j.LoggerFactory;
 import com.mysema.query.Tuple;
 import com.mysema.query.jpa.hibernate.HibernateQuery;
 
+//import org.dcm4chee.archive.iocm.RejectionEvent;
+//import org.dcm4chee.archive.iocm.RejectionType;
+
 /**
  * @author Gunter Zeilinger <gunterze@gmail.com>
- *
  */
 @ApplicationScoped
 public class IANSCUImpl implements IANSCU {
 
     private static final Logger LOG = LoggerFactory.getLogger(IANSCUImpl.class);
 
-    @PersistenceContext(unitName="dcm4chee-arc")
+    @PersistenceContext(name = "dcm4chee-arc", unitName = "dcm4chee-arc")
     private EntityManager em;
 
-    @Resource(mappedName="java:/ConnectionFactory")
+    @Resource(mappedName = "java:/JmsXA")
     private ConnectionFactory connFactory;
 
-    @Resource(mappedName="java:/queue/ianscu")
+    @Resource(mappedName = "java:/queue/ianscu")
     private Queue ianSCUQueue;
 
     @Inject
@@ -116,42 +115,53 @@ public class IANSCUImpl implements IANSCU {
     @Inject
     private Device device;
 
-    public void onMPPSReceive(@Observes @MPPSFinal MPPSEvent event) {
-        ApplicationEntity ae = event.getApplicationEntity();
-        MPPS mpps = event.getPerformedProcedureStep();
-        ArchiveAEExtension arcAE = ae.getAEExtension(ArchiveAEExtension.class);
-        if (arcAE != null && arcAE.getIANDestinations().length > 0
-                && !isIncorrectWorklistEntrySelected(mpps)) {
-            IANBuilder builder = createIANBuilder(mpps);
-            if (builder.numberOfOutstandingInstances() == 0)
-                scheduleSendIAN(ae.getAETitle(), arcAE.getIANDestinations(),
-                        builder.getIAN());
+    public void onMPPSReceive(MPPSContext context, Attributes attributes) {
+        ApplicationEntity ae;
+        try {
+            ae = device.getApplicationEntityNotNull(context.getReceivingAET());
+
+            ArchiveAEExtension arcAE = ae.getAEExtension(ArchiveAEExtension.class);
+            if (arcAE != null
+                    && arcAE.getIANDestinations().length > 0
+                    && !isIncorrectWorklistEntrySelected(attributes)) {
+                IANBuilder builder = createIANBuilder(context.getMppsSopInstanceUID(), attributes);
+                if (builder.numberOfOutstandingInstances() == 0)
+                    scheduleSendIAN(ae.getAETitle(), arcAE.getIANDestinations(), builder.getIAN());
+            }
+        } catch (Exception e) {
+            LOG.error("Error while scheduling IAN", e);
         }
     }
 
-    private boolean isIncorrectWorklistEntrySelected(MPPS mpps) {
-        ArchiveDeviceExtension arcDev = 
-                device.getDeviceExtension(ArchiveDeviceExtension.class);
-        Code incorrectWorklistEntrySelected = arcDev != null
-                ? (Code) arcDev.getIncorrectWorklistEntrySelectedCode()
-                : null;
-        return incorrectWorklistEntrySelected != null
-                && incorrectWorklistEntrySelected.equals(
-                        mpps.getDiscontinuationReasonCode());
+    private boolean isIncorrectWorklistEntrySelected(Attributes mppsAttrs) {
+        try {
+            org.dcm4che3.data.Code discontinuationCodeInMpps = new org.dcm4che3.data.Code(mppsAttrs.getNestedDataset(Tag.PerformedProcedureStepDiscontinuationReasonCodeSequence));
+            org.dcm4che3.data.Code incorrectWorklistEntrySelectedCode = getIncorrectWorklistEntrySelectedCode();
+
+            return discontinuationCodeInMpps.equals(incorrectWorklistEntrySelectedCode);
+
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private org.dcm4che3.data.Code getIncorrectWorklistEntrySelectedCode() {
+        return device
+                        .getDeviceExtensionNotNull(ArchiveDeviceExtension.class)
+                        .getIncorrectWorklistEntrySelectedCode();
     }
 
     private void scheduleSendIAN(String localAET, String[] remoteAETs,
-            Attributes ian) {
+                                 Attributes ian) {
         String iuid = UIDUtils.createUID();
         for (String remoteAET : remoteAETs) {
             scheduleSendIAN(localAET, remoteAET, iuid, ian, 0, 0);
         }
     }
 
-    private IANBuilder createIANBuilder(MPPS pps) {
+    private IANBuilder createIANBuilder(String mppsSopInstanceUID, Attributes ppsattrs) {
         IANBuilder builder = new IANBuilder();
-        Attributes ppsattrs = pps.getAttributes();
-        builder.setReferencedMPPS(pps.getSopInstanceUID(), ppsattrs);
+        builder.setReferencedMPPS(mppsSopInstanceUID, ppsattrs);
         Sequence perfSeriesSeq = ppsattrs.getSequence(Tag.PerformedSeriesSequence);
         for (Attributes series : perfSeriesSeq) {
             String seriesIUID = series.getString(Tag.SeriesInstanceUID);
@@ -161,17 +171,17 @@ public class IANSCUImpl implements IANSCU {
 
             List<Tuple> list = new HibernateQuery(
                     em.unwrap(org.hibernate.Session.class))
-                .from(QInstance.instance)
-                .innerJoin(QInstance.instance.series, QSeries.series)
-                .innerJoin(QSeries.series.study, QStudy.study)
-                .where(QSeries.series.seriesInstanceUID.eq(seriesIUID),
-                        QInstance.instance.rejectionNoteCode.isNull())
-                .list(QStudy.study.studyInstanceUID,
-                        QInstance.instance.sopInstanceUID,
-                        QInstance.instance.sopClassUID,
-                        QInstance.instance.availability,
-                        QInstance.instance.retrieveAETs,
-                        QInstance.instance.externalRetrieveLocations);
+                    .from(QInstance.instance)
+                    .innerJoin(QInstance.instance.series, QSeries.series)
+                    .innerJoin(QSeries.series.study, QStudy.study)
+                    .where(QSeries.series.seriesInstanceUID.eq(seriesIUID),
+                            QInstance.instance.rejectionNoteCode.isNull())
+                    .list(QStudy.study.studyInstanceUID,
+                            QInstance.instance.sopInstanceUID,
+                            QInstance.instance.sopClassUID,
+                            QInstance.instance.availability,
+                            QInstance.instance.retrieveAETs,
+                            QInstance.instance.externalRetrieveLocations);
 
             for (Tuple tuple : list) {
                 builder.addReferencedInstance(
@@ -181,7 +191,7 @@ public class IANSCUImpl implements IANSCU {
                         tuple.get(QInstance.instance.sopClassUID),
                         tuple.get(QInstance.instance.availability),
                         Utils.decodeAETs(
-                            tuple.get(QInstance.instance.retrieveAETs)));
+                                tuple.get(QInstance.instance.retrieveAETs)));
             }
         }
         return builder;
@@ -193,12 +203,12 @@ public class IANSCUImpl implements IANSCU {
 
         StoreSession storeSession = storeContext.getStoreSession();
         ArchiveAEExtension arcAE = storeSession.getArchiveAEExtension();
-        if (arcAE == null || arcAE.getIANDestinations().length == 0)
-            return;
+        if (arcAE == null || arcAE.getIANDestinations().length == 0) return;
 
         MPPS mpps = (MPPS) storeContext.getProperty(MPPS.class.getName());
-        if (mpps != null && mpps.getStatus() != MPPS.Status.IN_PROGRESS
-                && !isIncorrectWorklistEntrySelected(mpps))
+        if (mpps != null
+                && mpps.getStatus() != MPPS.Status.IN_PROGRESS
+                && mpps.discontinuedForReason((Code) getIncorrectWorklistEntrySelectedCode()))
             scheduleIANForMPPS(storeContext, mpps);
     }
 
@@ -207,7 +217,7 @@ public class IANSCUImpl implements IANSCU {
         IANBuilder builder = (IANBuilder) storeSession.getProperty(IANBuilder.class.getName());
         if (builder == null
                 || !builder.getMPPSInstanceUID().equals(mpps.getSopInstanceUID())) {
-            builder = createIANBuilder(mpps);
+            builder = createIANBuilder(mpps.getSopInstanceUID(), mpps.getAttributes());
             storeSession.setProperty(IANBuilder.class.getName(), builder);
         } else {
             Instance inst = storeContext.getInstance();
@@ -275,7 +285,7 @@ public class IANSCUImpl implements IANSCU {
 //    }
 
     private void scheduleSendIAN(String localAET, String remoteAET,
-            String iuid, Attributes attrs, int retries, long delay) {
+                                 String iuid, Attributes attrs, int retries, long delay) {
         try {
             Connection conn = connFactory.createConnection();
             try {
@@ -300,7 +310,7 @@ public class IANSCUImpl implements IANSCU {
 
     @Override
     public void sendIAN(String localAET, String remoteAET,
-            String iuid, Attributes attrs, int retries) {
+                        String iuid, Attributes attrs, int retries) {
         ApplicationEntity localAE = device
                 .getApplicationEntity(localAET);
         if (localAE == null) {
@@ -310,11 +320,11 @@ public class IANSCUImpl implements IANSCU {
         }
         AAssociateRQ aarq = new AAssociateRQ();
         aarq.addPresentationContext(
-                        new PresentationContext(
-                                1,
-                                UID.InstanceAvailabilityNotificationSOPClass,
-                                UID.ExplicitVRLittleEndian,
-                                UID.ImplicitVRLittleEndian));
+                new PresentationContext(
+                        1,
+                        UID.InstanceAvailabilityNotificationSOPClass,
+                        UID.ExplicitVRLittleEndian,
+                        UID.ImplicitVRLittleEndian));
         try {
             ApplicationEntity remoteAE = aeCache
                     .findApplicationEntity(remoteAET);

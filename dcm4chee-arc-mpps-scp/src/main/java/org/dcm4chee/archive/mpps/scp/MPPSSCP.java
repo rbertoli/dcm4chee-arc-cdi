@@ -38,25 +38,27 @@
 
 package org.dcm4chee.archive.mpps.scp;
 
-import javax.enterprise.context.ApplicationScoped;
-import javax.enterprise.inject.Typed;
-import javax.inject.Inject;
-
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.Tag;
-import org.dcm4che3.net.ApplicationEntity;
 import org.dcm4che3.net.Association;
 import org.dcm4che3.net.Dimse;
 import org.dcm4che3.net.Status;
 import org.dcm4che3.net.service.BasicMPPSSCP;
 import org.dcm4che3.net.service.DicomService;
 import org.dcm4che3.net.service.DicomServiceException;
-import org.dcm4chee.archive.conf.ArchiveAEExtension;
 import org.dcm4chee.archive.entity.MPPS;
+import org.dcm4chee.archive.mpps.MPPSContext;
 import org.dcm4chee.archive.mpps.MPPSService;
+import org.dcm4chee.archive.util.RetryBean;
+
+import javax.enterprise.context.ApplicationScoped;
+import javax.enterprise.inject.Typed;
+import javax.inject.Inject;
+import java.util.concurrent.Callable;
 
 /**
  * @author Gunter Zeilinger <gunterze@gmail.com>
+ * @author Roman K
  */
 @ApplicationScoped
 @Typed(DicomService.class)
@@ -65,41 +67,43 @@ public class MPPSSCP extends BasicMPPSSCP implements DicomService {
     @Inject
     private MPPSService mppsService;
 
-    @Override
-    protected Attributes create(Association as, Attributes cmd,
-            Attributes data, Attributes rsp) throws DicomServiceException {
-        try {
-            String iuid = cmd.getString(Tag.AffectedSOPInstanceUID);
-            ApplicationEntity ae = as.getApplicationEntity();
-            ArchiveAEExtension aeArc = ae.getAEExtension(ArchiveAEExtension.class);
-            mppsService.coerceAttributes(as, Dimse.N_CREATE_RQ, data);
-            MPPS mpps = mppsService.createPerformedProcedureStep(aeArc,
-                    iuid, data, null, mppsService);
+    @Inject
+    RetryBean<Void,DicomServiceException> retry;
 
-            mppsService.fireCreateMPPSEvent(ae, data, mpps);
+    @Override
+    protected Attributes create(final Association as, Attributes cmd, final Attributes data, Attributes rsp) throws DicomServiceException {
+        try {
+            final String iuid = cmd.getString(Tag.AffectedSOPInstanceUID);
+
+            retry.retry(new RetryBean.Retryable<Void, DicomServiceException>() {
+                @Override
+                public Void call() throws DicomServiceException {
+                    mppsService.createPerformedProcedureStep(data, new MPPSContext(as.getCallingAET(), as.getCalledAET(), iuid, Dimse.N_CREATE_RQ));
+                    return null;
+                }
+            });
+
         } catch (DicomServiceException e) {
             throw e;
         } catch (Exception e) {
             throw new DicomServiceException(Status.ProcessingFailure, e);
         }
+        
         return null;
     }
 
     @Override
-    protected Attributes set(Association as, Attributes cmd, Attributes data,
-            Attributes rsp) throws DicomServiceException {
+    protected Attributes set(final Association as, Attributes cmd, final Attributes data, Attributes rsp) throws DicomServiceException {
         try {
-            String iuid = cmd.getString(Tag.RequestedSOPInstanceUID);
-            ApplicationEntity ae = as.getApplicationEntity();
-            ArchiveAEExtension aeArc = ae.getAEExtension(ArchiveAEExtension.class);
-            mppsService.coerceAttributes(as, Dimse.N_SET_RQ, data);
-            MPPS mpps = mppsService.updatePerformedProcedureStep(aeArc,
-                    iuid, data, mppsService);
+            final String iuid = cmd.getString(Tag.RequestedSOPInstanceUID);
 
-            if (mpps.getStatus() == MPPS.Status.IN_PROGRESS)
-                mppsService.fireUpdateMPPSEvent(ae, data, mpps);
-            else
-                mppsService.fireFinalMPPSEvent(ae, data, mpps);
+            retry.retry(new RetryBean.Retryable<Void, DicomServiceException>() {
+                @Override
+                public Void call() throws DicomServiceException {
+                    mppsService.updatePerformedProcedureStep(data, new MPPSContext(as.getCallingAET(), as.getCalledAET(), iuid, Dimse.N_SET_RQ));
+                    return null;
+                }
+            });
 
         } catch (DicomServiceException e) {
             throw e;

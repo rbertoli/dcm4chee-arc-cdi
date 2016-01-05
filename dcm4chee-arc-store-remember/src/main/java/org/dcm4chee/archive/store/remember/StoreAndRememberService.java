@@ -37,27 +37,18 @@
  * ***** END LICENSE BLOCK ***** */
 package org.dcm4chee.archive.store.remember;
 
-import javax.enterprise.event.Observes;
-
-import org.dcm4chee.archive.dto.Service;
-import org.dcm4chee.archive.dto.ServiceType;
-import org.dcm4chee.archive.stgcmt.scp.CommitEvent;
-import org.dcm4chee.archive.qido.client.QidoResponse;
-import org.dcm4chee.storage.conf.Availability;
 
 /**
  * @author Hesham Elbadawi <bsdreko@gmail.com>
+ * @author Alexander Hoermandinger <alexander.hoermandinger@agfa.com>
  *
  */
 public interface StoreAndRememberService {
 
-    void addExternalLocation(String iuid, String retrieveAET
-            , String remoteDeviceName, Availability availability);
+    StoreAndRememberContextBuilder createContextBuilder();
 
-    void removeExternalLocations(String iuid, String retrieveAET);
+    void scheduleStoreAndRemember(StoreAndRememberContext context, long delay);
 
-    void removeExternalLocations(String iuid, Availability availability);
+    void storeAndRemember(StoreAndRememberContext context);
 
-    void verifyCommit(@Observes @Service(ServiceType.STOREREMEMBER) CommitEvent commitEvent);
-    void verifyQido(@Observes @Service(ServiceType.STOREREMEMBER) QidoResponse response);
 }

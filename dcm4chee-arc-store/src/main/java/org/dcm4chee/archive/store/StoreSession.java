@@ -38,10 +38,6 @@
 
 package org.dcm4chee.archive.store;
 
-import java.nio.file.Path;
-import java.security.MessageDigest;
-import java.util.TimeZone;
-
 import org.dcm4che3.net.ApplicationEntity;
 import org.dcm4che3.net.Device;
 import org.dcm4chee.archive.conf.ArchiveAEExtension;
@@ -49,7 +45,15 @@ import org.dcm4chee.archive.conf.StoreParam;
 import org.dcm4chee.archive.dto.Participant;
 import org.dcm4chee.storage.conf.StorageSystem;
 
+import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.util.List;
+import java.util.TimeZone;
+
 /**
+ * Aggregates a number of useful properties related to the ongoing store,
+ * transaction.  There is one StoreSession instance per Association.
+ *
  * @author Gunter Zeilinger <gunterze@gmail.com>
  *
  */
@@ -70,6 +74,10 @@ public interface StoreSession {
     StorageSystem getStorageSystem();
 
     void setStorageSystem(StorageSystem storageSystem);
+
+    void setSpoolStorageSystem(StorageSystem spoolStorageSystem);
+
+    StorageSystem getSpoolStorageSystem();
 
     StorageSystem getMetaDataStorageSystem();
 
@@ -107,4 +115,7 @@ public interface StoreSession {
 
     TimeZone getSourceDeviceTimeZone();
 
+    List<String> getStoredFiles();
+
+    void addStoredFile(String storedFile);
 }

@@ -56,6 +56,8 @@ import org.dcm4che3.io.DicomInputStream;
 import org.dcm4che3.io.DicomOutputStream;
 import org.dcm4che3.util.StringUtils;
 import org.dcm4che3.util.TagUtils;
+import org.dcm4chee.archive.conf.AttributeFilter;
+import org.dcm4chee.archive.conf.MetadataUpdateStrategy;
 import org.dcm4chee.archive.conf.PrivateTag;
 import org.dcm4chee.storage.conf.Availability;
 
@@ -63,6 +65,14 @@ import org.dcm4chee.storage.conf.Availability;
  * @author Gunter Zeilinger <gunterze@gmail.com>
  */
 public class Utils {
+
+
+    public static String upper (String value) {
+        if (value == null)
+            return null;
+
+        return value.toUpperCase();
+    }
 
     public static byte[] encodeAttributes(Attributes attrs) {
         ByteArrayOutputStream out = new ByteArrayOutputStream(512);
@@ -134,7 +144,8 @@ public class Utils {
     public static void setStudyQueryAttributes(Attributes attrs,
             int numberOfStudyRelatedSeries, int numberOfStudyRelatedInstances,
             String modalitiesInStudy, String sopClassesInStudy,
-            Date studyLastUpdateTime, PrivateTag studyLastUpdateTimeTag) {
+            int numberVisibleInstances, PrivateTag numberVisibleInstancesTag,
+            Date lastUpdateTime, PrivateTag lastUpdateTimeTag) {
 
         attrs.setInt(Tag.NumberOfStudyRelatedSeries, VR.IS,
                 numberOfStudyRelatedSeries);
@@ -144,15 +155,28 @@ public class Utils {
                 StringUtils.split(modalitiesInStudy, '\\'));
         attrs.setString(Tag.SOPClassesInStudy, VR.CS,
                 StringUtils.split(sopClassesInStudy, '\\'));
-        if (studyLastUpdateTimeTag!=null && studyLastUpdateTime!=null)
-            attrs.setDate(studyLastUpdateTimeTag.getCreator(),
-            studyLastUpdateTimeTag.getIntTag(),VR.DT,studyLastUpdateTime);
+        if (lastUpdateTimeTag!=null && lastUpdateTime!=null)
+            attrs.setDate(lastUpdateTimeTag.getCreator(),
+            lastUpdateTimeTag.getIntTag(),VR.DT,lastUpdateTime);
+        if (numberVisibleInstancesTag!=null)
+            attrs.setInt(numberVisibleInstancesTag.getCreator(),
+                    numberVisibleInstancesTag.getIntTag(), VR.IS,
+                    numberVisibleInstances);
     }
 
     public static void setSeriesQueryAttributes(Attributes attrs,
-            int numberOfSeriesRelatedInstances) {
+            int numberOfSeriesRelatedInstances, int numberVisibleInstances,
+            PrivateTag numberVisibleInstancesTag, Date lastUpdateTime,
+            PrivateTag lastUpdateTimeTag) {
         attrs.setInt(Tag.NumberOfSeriesRelatedInstances, VR.IS,
                 numberOfSeriesRelatedInstances);
+        if (numberVisibleInstancesTag!=null)
+            attrs.setInt(numberVisibleInstancesTag.getCreator(),
+                    numberVisibleInstancesTag.getIntTag(), VR.IS,
+                    numberVisibleInstances);
+        if (lastUpdateTimeTag!=null && lastUpdateTime!=null)
+            attrs.setDate(lastUpdateTimeTag.getCreator(),
+                    lastUpdateTimeTag.getIntTag(), VR.DT, lastUpdateTime);
     }
 
     public static String[] decodeAETs(String aetsSeparated) {
@@ -244,5 +268,34 @@ public class Utils {
             if (!attrs.getSpecificCharacterSet().isUTF8())
                 attrs.setSpecificCharacterSet("ISO_IR 192"); // UTF-8
         }
+    }
+
+    /**
+     * Updates an attributes set (the current one) with a set of incoming
+     * attributes, according to the configured strategy. Eventually stores
+     * in a modified set all the current modified attributes. A default
+     * value for the update strategy is also passed to the method
+     *
+     * @return <tt>true</tt> if one ore more attribute of the "current" set
+     *         were added or overwritten with a different value
+     */
+    public static boolean updateAttributes (Attributes current, Attributes incoming,
+            Attributes modified, AttributeFilter filter, MetadataUpdateStrategy defaultStrategy) {
+
+        MetadataUpdateStrategy strategy = filter.getMetadataUpdateStrategy() != null ? filter
+                .getMetadataUpdateStrategy() : defaultStrategy;
+
+        switch (strategy) {
+            case COERCE:
+                return false;
+            case COERCE_MERGE:
+                return current.mergeSelected(incoming, filter.getCompleteSelection(incoming));
+            case OVERWRITE:
+                return current.addSelected(incoming, filter.getCompleteSelection(incoming));
+            case OVERWRITE_MERGE:
+                return current.updateSelected(incoming, modified, filter.getCompleteSelection(incoming));
+        }
+
+        return false;
     }
 }

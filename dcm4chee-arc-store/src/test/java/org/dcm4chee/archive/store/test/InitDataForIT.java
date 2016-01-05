@@ -40,7 +40,6 @@ package org.dcm4chee.archive.store.test;
 
 import javax.inject.Inject;
 
-import org.apache.log4j.Logger;
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.io.SAXReader;
 import org.dcm4che3.net.Device;
@@ -55,12 +54,11 @@ import org.dcm4chee.storage.conf.StorageSystemGroup;
 import org.jboss.arquillian.container.test.api.Deployment;
 import org.jboss.arquillian.junit.Arquillian;
 import org.jboss.shrinkwrap.api.ShrinkWrap;
-import org.jboss.shrinkwrap.api.asset.EmptyAsset;
-import org.jboss.shrinkwrap.api.spec.JavaArchive;
 import org.jboss.shrinkwrap.api.spec.WebArchive;
-import org.jboss.shrinkwrap.resolver.api.maven.Maven;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * @author Gunter Zeilinger <gunterze@gmail.com>
@@ -73,7 +71,7 @@ public class InitDataForIT {
 
     private static final String[] RETRIEVE_AETS = { "RETRIEVE_AET" };
 
-    private static final Logger log = Logger.getLogger(InitDataForIT.class);
+    private static final Logger log = LoggerFactory.getLogger(InitDataForIT.class);
     
     @Inject
     private StoreService storeService;
@@ -132,15 +130,7 @@ public class InitDataForIT {
         WebArchive war= ShrinkWrap.create(WebArchive.class, "test.war");
         war.addClass(InitDataForIT.class);
         war.addClass(ParamFactory.class);
-        JavaArchive[] archs =   Maven.resolver()
-                .loadPomFromFile("testpom.xml")
-                .importRuntimeAndTestDependencies()
-                .resolve().withoutTransitivity()
-                .as(JavaArchive.class);
-        for(JavaArchive a: archs) {
-            a.addAsManifestResource(EmptyAsset.INSTANCE, "beans.xml");
-            war.addAsLibrary(a);
-        }
+        ITHelper.addDefaultDependenciesToWebArchive(war);
         for (String resourceName : INSTANCES)
             war.addAsResource(resourceName);
 //        war.as(ZipExporter.class).exportTo(
@@ -170,7 +160,7 @@ public class InitDataForIT {
 //        em.joinTransaction();
         for (String res : INSTANCES) {
             StoreContext storeContext = storeService.createStoreContext(session);
-            storeContext.setAttributes(load(res));
+            storeContext.setAttributesForDatabase(load(res));
             storeService.updateDB(storeContext);
         }
 //        utx.commit();

@@ -3,7 +3,7 @@
   <parent>
     <groupId>org.dcm4che.dcm4chee-arc</groupId>
     <artifactId>dcm4chee-arc-parent</artifactId>
-    <version>4.4.0.Beta1</version>
+    <version>4.5.0-SNAPSHOT</version>
   </parent>
   <artifactId>dcm4chee-arc-entity</artifactId>
   <properties>
@@ -23,6 +23,14 @@
       <groupId>org.dcm4che.dcm4chee-arc</groupId>
       <artifactId>dcm4chee-arc-conf</artifactId>
       <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.dcm4che.dcm4chee-arc</groupId>
+      <artifactId>dcm4chee-arc-api</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.dcm4che.dcm4chee-arc</groupId>
+      <artifactId>dcm4chee-arc-core</artifactId>
     </dependency>
     <dependency>
       <groupId>org.dcm4che.dcm4chee-arc</groupId>
@@ -143,7 +151,7 @@
           <classifier>${db}</classifier>
           <archive>
             <manifestEntries>
-              <Dependencies>org.dcm4che.core, org.dcm4che.soundex, com.mysema.querydsl</Dependencies>
+              <Dependencies>org.dcm4che.core, org.dcm4che.soundex, com.mysema.querydsl, org.dcm4chee.archive.api</Dependencies>
             </manifestEntries>
           </archive>
         </configuration>

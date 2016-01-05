@@ -81,6 +81,12 @@ public class AttributeFilter implements Serializable {
     @ConfigurableProperty(name = "dcmCustomAttribute3")
     private ValueSelector customAttribute3;
 
+    @ConfigurableProperty(name = "dcmmetadataUpdateStrategy")
+    private MetadataUpdateStrategy metadataUpdateStrategy;
+
+    // cached complete selection
+    private int[] completeselection = null;
+
     public AttributeFilter() {
     }
 
@@ -92,6 +98,13 @@ public class AttributeFilter implements Serializable {
         Arrays.sort(this.selection = selection);
         setPrivateSelection(privateSelection);
     }
+
+    public AttributeFilter(int[] selection, Map<Integer, String> privateSelection,
+            MetadataUpdateStrategy strategy) {
+        Arrays.sort(this.selection = selection);
+        setPrivateSelection(privateSelection);
+        setMetadataUpdateStrategy(strategy);
+    }
     
     /**
      * merges non private tags with private tags matching the configured private
@@ -99,26 +112,30 @@ public class AttributeFilter implements Serializable {
      */
     public int[] getCompleteSelection(Attributes attrs) {
 
+        if (completeselection != null)
+            return completeselection;
+
         if (privateSelection == null || privateSelection.size() == 0)
             return selection;
 
         ArrayList<Integer> privateTags = new ArrayList<>();
 
-        // filter out private tags not belonging to the configured private
-        // creator
+        // add private tags to the filter
         for (int privateTag : privateSelection.keySet()) {
             String configuredCreator = privateSelection.get(privateTag);
-            if (configuredCreator.equalsIgnoreCase(attrs
-                    .getPrivateCreator(privateTag)))
-                privateTags.add(privateTag);
+            if (attrs.contains(configuredCreator, privateTag))
+                privateTags.add(attrs.tagOf(configuredCreator, privateTag));
         }
 
         // merge non-private and private tags
-        int[] res = new int[selection.length + privateTags.size()];
-        System.arraycopy(selection, 0, res, 0, selection.length);
+        completeselection = new int[selection.length + privateTags.size()];
+        System.arraycopy(selection, 0, completeselection, 0, selection.length);
         for (int i = 0; i < privateTags.size(); i++)
-            res[selection.length+i] = privateTags.get(i);
-        return res;
+            completeselection[selection.length+i] = privateTags.get(i);
+
+        Arrays.sort(completeselection);
+
+        return completeselection;
     }
 
     public int[] getSelection() {
@@ -156,6 +173,7 @@ public class AttributeFilter implements Serializable {
     }
 
     public void setSelection(int[] selection) {
+        this.completeselection = null; //invalidate
         this.selection = selection;
     }
 
@@ -164,13 +182,21 @@ public class AttributeFilter implements Serializable {
     }
 
     public void setPrivateSelection(Map<Integer, String> privateSelection) {
+        this.completeselection = null; //invalidate
         this.privateSelection = privateSelection;
     }
     
     public Map<Integer, String> addPrivate(Integer tag, String creator) {
+        this.completeselection = null; //invalidate
         this.privateSelection.put(tag, creator);
         return this.privateSelection;
     }
-    
 
+    public MetadataUpdateStrategy getMetadataUpdateStrategy() {
+        return metadataUpdateStrategy;
+    }
+
+    public void setMetadataUpdateStrategy(MetadataUpdateStrategy metadataUpdateStrategy) {
+        this.metadataUpdateStrategy = metadataUpdateStrategy;
+    }
 }

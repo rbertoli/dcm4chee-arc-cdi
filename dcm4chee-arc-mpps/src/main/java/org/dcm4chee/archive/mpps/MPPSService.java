@@ -39,39 +39,33 @@
 package org.dcm4chee.archive.mpps;
 
 import org.dcm4che3.data.Attributes;
-import org.dcm4che3.net.ApplicationEntity;
 import org.dcm4che3.net.Association;
 import org.dcm4che3.net.Dimse;
 import org.dcm4che3.net.service.DicomServiceException;
 import org.dcm4chee.archive.conf.ArchiveAEExtension;
-import org.dcm4chee.archive.conf.StoreParam;
 import org.dcm4chee.archive.entity.MPPS;
 import org.dcm4chee.archive.entity.Patient;
 
 /**
  * @author Gunter Zeilinger <gunterze@gmail.com>
- *
  */
 public interface MPPSService {
 
-    MPPS createPerformedProcedureStep(ArchiveAEExtension arcAE,
-            String sopInstanceUID, Attributes attrs, Patient patient,
-            MPPSService service) throws DicomServiceException;
-
-    MPPS updatePerformedProcedureStep(ArchiveAEExtension arcAE,
-            String iuid, Attributes attrs, MPPSService service)
+    void createPerformedProcedureStep(Attributes attrs, MPPSContext mppsContext)
             throws DicomServiceException;
 
-    Patient findOrCreatePatient(Attributes attrs, StoreParam storeParam)
+    void updatePerformedProcedureStep(Attributes attrs, MPPSContext mppsContext)
             throws DicomServiceException;
 
-    void coerceAttributes(Association as, Dimse dimse, Attributes attrs)
+    @Deprecated
+    void createPerformedProcedureStep(String mppsSopInstanceUID, Attributes attrs, MPPSContext mppsContext)
             throws DicomServiceException;
 
-    void fireCreateMPPSEvent(ApplicationEntity ae, Attributes data, MPPS mpps);
+    @Deprecated
+    void updatePerformedProcedureStep(String mppsSopInstanceUID, Attributes attrs, MPPSContext mppsContext)
+            throws DicomServiceException;
 
-    void fireUpdateMPPSEvent(ApplicationEntity ae, Attributes data, MPPS mpps);
-
-    void fireFinalMPPSEvent(ApplicationEntity ae, Attributes data, MPPS mpps);
+    @Deprecated
+    void coerceAttributes(MPPSContext context, Dimse dimse, Attributes attrs) throws DicomServiceException;
 
 }
